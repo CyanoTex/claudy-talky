@@ -1,120 +1,286 @@
-# claude-peers
+# claudy-talky
 
-Let your Claude Code instances find each other and talk. When you're running 5 sessions across different projects, any Claude can discover the others and send messages that arrive instantly.
+Let Claude talk to any local agent.
 
+`claudy-talky` starts from the `claude-peers-mcp` idea, but generalizes it from "Claude talking to Claude" into "Claude talking to any agent that can join a lightweight local broker."
+
+That means:
+
+- Claude Code can still discover and message other Claude sessions.
+- Codex can join the same network through its MCP config.
+- Gemini CLI can join through `.gemini/settings.json` or `gemini mcp add`.
+- Antigravity can join through its raw `mcp_config.json`.
+- Non-Claude agents can join over plain HTTP.
+- Everyone shares the same local registry, heartbeat loop, and message queue.
+
+```text
+Claude Code session           HTTP agent              Another Claude session
+┌──────────────────┐         ┌───────────────┐        ┌──────────────────┐
+│ claudy-talky MCP │         │ custom agent  │        │ claudy-talky MCP │
+│ tools + channel  │         │ poll/heartbeat│        │ tools + channel  │
+└────────┬─────────┘         └──────┬────────┘        └────────┬─────────┘
+         │                           │                         │
+         └─────────────── local broker + SQLite ───────────────┘
 ```
-  Terminal 1 (poker-engine)          Terminal 2 (eel)
-  ┌───────────────────────┐          ┌──────────────────────┐
-  │ Claude A              │          │ Claude B             │
-  │ "send a message to    │  ──────> │                      │
-  │  peer xyz: what files │          │ <channel> arrives    │
-  │  are you editing?"    │  <────── │  instantly, Claude B │
-  │                       │          │  responds            │
-  └───────────────────────┘          └──────────────────────┘
-```
 
-## Quick start
+## Quick Start
 
 ### 1. Install
 
 ```bash
-git clone https://github.com/louislva/claude-peers-mcp.git ~/claude-peers-mcp   # or wherever you like
-cd ~/claude-peers-mcp
+git clone https://github.com/CyanoTex/claudy-talky.git
+cd claudy-talky
 bun install
 ```
 
-### 2. Register the MCP server
-
-This makes claude-peers available in every Claude Code session, from any directory:
+### 2. Register the MCP server for Claude Code
 
 ```bash
-claude mcp add --scope user --transport stdio claude-peers -- bun ~/claude-peers-mcp/server.ts
+claude mcp add --scope user --transport stdio claudy-talky -- bun /absolute/path/to/claudy-talky/server.ts
 ```
 
-Replace `~/claude-peers-mcp` with wherever you cloned it.
-
-### 3. Run Claude Code with the channel
+### 3. Start Claude Code with channels enabled
 
 ```bash
-claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-peers
+claude --dangerously-skip-permissions --dangerously-load-development-channels server:claudy-talky
 ```
 
-That's it. The broker daemon starts automatically the first time.
+### 4. Ask Claude to inspect the local agent network
 
-> **Tip:** Add it to an alias so you don't have to type it every time:
->
-> ```bash
-> alias claudepeers='claude --dangerously-load-development-channels server:claude-peers'
-> ```
-
-### 4. Open a second session and try it
-
-In another terminal, start Claude Code the same way. Then ask either one:
-
-> List all peers on this machine
-
-It'll show every running instance with their working directory, git repo, and a summary of what they're doing. Then:
-
-> Send a message to peer [id]: "what are you working on?"
-
-The other Claude receives it immediately and responds.
-
-## What Claude can do
-
-| Tool             | What it does                                                                   |
-| ---------------- | ------------------------------------------------------------------------------ |
-| `list_peers`     | Find other Claude Code instances — scoped to `machine`, `directory`, or `repo` |
-| `send_message`   | Send a message to another instance by ID (arrives instantly via channel push)  |
-| `set_summary`    | Describe what you're working on (visible to other peers)                       |
-| `check_messages` | Manually check for messages (fallback if not using channel mode)               |
-
-## How it works
-
-A **broker daemon** runs on `localhost:7899` with a SQLite database. Each Claude Code session spawns an MCP server that registers with the broker and polls for messages every second. Inbound messages are pushed into the session via the [claude/channel](https://code.claude.com/docs/en/channels-reference) protocol, so Claude sees them immediately.
-
-```
-                    ┌───────────────────────────┐
-                    │  broker daemon            │
-                    │  localhost:7899 + SQLite  │
-                    └──────┬───────────────┬────┘
-                           │               │
-                      MCP server A    MCP server B
-                      (stdio)         (stdio)
-                           │               │
-                      Claude A         Claude B
+```text
+List all agents on this machine
 ```
 
-The broker auto-launches when the first session starts. It cleans up dead peers automatically. Everything is localhost-only.
+Then:
 
-## Auto-summary
+```text
+Send a message to agent <id>: "what are you working on?"
+```
 
-If you set `OPENAI_API_KEY` in your environment, each instance generates a brief summary on startup using `gpt-5.4-nano` (costs fractions of a cent). The summary describes what you're likely working on based on your directory, git branch, and recent files. Other instances see this when they call `list_peers`.
+## Connect Codex
 
-Without the API key, Claude sets its own summary via the `set_summary` tool.
+OpenAI's current Codex MCP docs say Codex supports both stdio and streamable HTTP MCP servers, with configuration in `~/.codex/config.toml` or a project `.codex/config.toml`. This repo now includes a project-scoped Codex config in `.codex/config.toml` that points Codex at `codex-server.ts`.
+
+### Project-scoped setup
+
+If this repo is trusted in Codex, the checked-in config is enough:
+
+```toml
+[mcp_servers."claudy-talky"]
+command = "bun"
+args = ["./codex-server.ts"]
+```
+
+### Global setup
+
+If you prefer a global Codex config instead, add the equivalent entry to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers."claudy-talky"]
+command = "bun"
+args = ["C:/absolute/path/to/claudy-talky/codex-server.ts"]
+```
+
+### How Codex participates
+
+- `codex-server.ts` registers Codex as an `openai-codex` agent on the same broker.
+- Codex gets `list_agents`, `send_message`, `set_summary`, and `check_messages`.
+- Unlike Claude Code, Codex does not use the Claude channel push path in this integration. Instead, `claudy-talky` polls in the background and emits standard MCP log notifications when the client supports them, with `check_messages` kept as the fallback inbox.
+
+### Practical workflow
+
+1. Start Claude with `server.ts`.
+2. Open Codex in this repo so it loads `.codex/config.toml`.
+3. In Claude, ask for `list_agents` and message the `openai-codex` agent.
+4. In Codex, watch for `claudy-talky` inbox notifications when they appear, respond with `send_message`, and use `check_messages` whenever you want to review unread messages explicitly.
+
+## Connect Gemini CLI
+
+Google's official Gemini CLI docs say MCP servers are configured in `~/.gemini/settings.json` and can also be managed with `gemini mcp add`. This repo includes a project-scoped config in `.gemini/settings.json` that points Gemini CLI at `google-server.ts`.
+
+### Project-scoped Gemini setup
+
+If this repo is trusted in Gemini CLI, the checked-in config is enough:
+
+```json
+{
+  "mcpServers": {
+    "claudy-talky-gemini": {
+      "command": "bun",
+      "args": ["./google-server.ts", "--client", "gemini"]
+    }
+  }
+}
+```
+
+### Global Gemini setup
+
+You can also add it from the shell:
+
+```bash
+gemini mcp add claudy-talky-gemini bun ./google-server.ts --client gemini
+```
+
+### Gemini behavior
+
+- Gemini registers as a `google-gemini` agent.
+- It gets `list_agents`, `send_message`, `set_summary`, and `check_messages`.
+- Like Codex, it uses background inbox polling plus standard MCP log notifications when the client supports them, with `check_messages` as the fallback inbox.
+
+## Connect Antigravity
+
+From the Antigravity MCP text you shared, custom MCP servers are added through the MCP Store's raw `mcp_config.json`. To avoid conflicting with Claude's own `.mcp.json` in this repo, I added a ready-to-copy sample config in `antigravity.mcp_config.json`.
+
+Use this raw config entry in Antigravity:
+
+```json
+{
+  "mcpServers": {
+    "claudy-talky-antigravity": {
+      "command": "bun",
+      "args": ["./google-server.ts", "--client", "antigravity"]
+    }
+  }
+}
+```
+
+If Antigravity stores that raw config outside this repo, replace `./google-server.ts` with an absolute path to `google-server.ts`.
+
+### Antigravity behavior
+
+- Antigravity registers as a `google-antigravity` agent.
+- It uses the same tool surface as Gemini: `list_agents`, `send_message`, `set_summary`, and `check_messages`.
+- It uses the same background inbox polling path as Gemini, with standard MCP log notifications when the client supports them and `check_messages` as the fallback inbox.
+
+## z.ai Note
+
+z.ai looks possible as a provider layer, but not yet as a first-class `claudy-talky` agent runtime unless we build a dedicated wrapper. The official z.ai docs I checked describe configuring existing tools like Claude Code by changing provider environment variables, which is different from exposing a standalone z.ai CLI agent on the broker.
+
+## Claude Tools
+
+| Tool | What it does |
+| --- | --- |
+| `list_agents` | Discover connected agents on this machine, in this directory, or in this repo |
+| `send_message` | Send a message to another agent by ID |
+| `set_summary` | Publish a short description of Claude's current work |
+| `check_messages` | Manually check for inbound messages |
+| `list_peers` | Backward-compatible alias for `list_agents` |
+
+## Connect a Non-Claude Agent
+
+Any local agent can join by speaking simple HTTP to the broker.
+
+### Example agent
+
+```bash
+bun examples/http-agent.ts
+```
+
+This example:
+
+- registers as a `custom-http-agent`
+- heartbeats every 15 seconds
+- polls for inbound messages every second
+- replies with an acknowledgement
+
+### Minimal protocol
+
+Register:
+
+```bash
+curl -X POST http://127.0.0.1:7899/register-agent \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Planner Bot",
+    "kind": "custom-http-agent",
+    "transport": "http-poll",
+    "summary": "Plans work and coordinates subtasks.",
+    "capabilities": ["messaging", "planning"]
+  }'
+```
+
+Heartbeat:
+
+```bash
+curl -X POST http://127.0.0.1:7899/heartbeat \
+  -H "Content-Type: application/json" \
+  -d '{"id":"<agent-id>"}'
+```
+
+List agents:
+
+```bash
+curl -X POST http://127.0.0.1:7899/list-agents \
+  -H "Content-Type: application/json" \
+  -d '{"scope":"machine"}'
+```
+
+Send a message:
+
+```bash
+curl -X POST http://127.0.0.1:7899/send-message \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from_id":"<agent-id>",
+    "to_id":"<target-id>",
+    "text":"Hello from a custom agent."
+  }'
+```
+
+Poll messages:
+
+```bash
+curl -X POST http://127.0.0.1:7899/poll-messages \
+  -H "Content-Type: application/json" \
+  -d '{"id":"<agent-id>"}'
+```
+
+Unregister:
+
+```bash
+curl -X POST http://127.0.0.1:7899/unregister \
+  -H "Content-Type: application/json" \
+  -d '{"id":"<agent-id>"}'
+```
+
+## Architecture
+
+- `broker.ts` runs a localhost-only HTTP broker backed by SQLite.
+- `server.ts` is the Claude adapter. It exposes MCP tools and turns inbound messages into Claude channel notifications.
+- `codex-server.ts` is the Codex adapter. It exposes the same broker tools without relying on Claude-specific channel push.
+- `google-server.ts` is the Gemini CLI and Antigravity adapter. It exposes the same broker tools with explicit inbox polling.
+- `cli.ts` is a local utility for inspecting agents and sending messages.
+- `examples/http-agent.ts` shows how a non-Claude agent can join the network.
+- `shared/types.ts` defines the common wire protocol.
+- `shared/config.ts` centralizes config with legacy env var fallbacks.
+- `shared/polling-adapter.ts` factors the shared logic for non-Claude polling-based clients.
+- `.gemini/settings.json` is a project-scoped Gemini CLI MCP config.
+- `antigravity.mcp_config.json` is a copy-paste Antigravity raw MCP config example.
 
 ## CLI
 
-You can also inspect and interact from the command line:
-
 ```bash
-cd ~/claude-peers-mcp
-
-bun cli.ts status            # broker status + all peers
-bun cli.ts peers             # list peers
-bun cli.ts send <id> <msg>   # send a message into a Claude session
-bun cli.ts kill-broker       # stop the broker
+bun cli.ts status
+bun cli.ts agents
+bun cli.ts peers
+bun cli.ts send <agent-id> "<message>"
+bun cli.ts kill-broker
 ```
 
 ## Configuration
 
-| Environment variable | Default              | Description                           |
-| -------------------- | -------------------- | ------------------------------------- |
-| `CLAUDE_PEERS_PORT`  | `7899`               | Broker port                           |
-| `CLAUDE_PEERS_DB`    | `~/.claude-peers.db` | SQLite database path                  |
-| `OPENAI_API_KEY`     | —                    | Enables auto-summary via gpt-5.4-nano |
+| Environment variable | Default | Description |
+| --- | --- | --- |
+| `CLAUDY_TALKY_PORT` | `7899` | Broker port |
+| `CLAUDY_TALKY_DB` | Windows: `%LOCALAPPDATA%\\claudy-talky\\claudy-talky.db`; elsewhere: `~/.claudy-talky/claudy-talky.db` | SQLite database path |
+| `CLAUDY_TALKY_STALE_AGENT_MS` | `45000` | How long HTTP-only agents can miss heartbeats before cleanup |
+| `OPENAI_API_KEY` | — | Enables Claude auto-summary generation |
 
-## Requirements
+Legacy `CLAUDE_PEERS_PORT` and `CLAUDE_PEERS_DB` env vars are still accepted as fallbacks.
 
-- [Bun](https://bun.sh)
-- Claude Code v2.1.80+
-- claude.ai login (channels require it — API key auth won't work)
+## Notes
+
+- The broker binds to `127.0.0.1` only.
+- Claude sessions receive messages instantly through channel notifications.
+- Codex, Gemini CLI, Antigravity, and other non-Claude agents use heartbeat plus background inbox polling. When their clients support standard MCP log notifications, incoming messages can surface automatically; `check_messages` remains the fallback inbox.
+- This repo does not try to standardize every agent runtime yet; it provides a common local message bus Claude can already use today.

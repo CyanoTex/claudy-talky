@@ -1,45 +1,79 @@
 #!/usr/bin/env bun
 /**
- * claude-peers broker daemon
+ * claudy-talky broker daemon
  *
- * A singleton HTTP server on localhost:7899 backed by SQLite.
- * Tracks all registered Claude Code peers and routes messages between them.
+ * A singleton HTTP server on localhost backed by SQLite.
+ * Tracks all registered agents and routes messages between them.
  *
- * Auto-launched by the MCP server if not already running.
+ * Claude Code connects through the MCP server, but any agent that can make
+ * local HTTP requests can register, heartbeat, poll, and exchange messages.
+ *
  * Run directly: bun broker.ts
  */
 
 import { Database } from "bun:sqlite";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { getBrokerPort, getDbPath, getStaleAgentMs } from "./shared/config.ts";
 import type {
-  RegisterRequest,
-  RegisterResponse,
+  Agent,
   HeartbeatRequest,
-  SetSummaryRequest,
-  ListPeersRequest,
-  SendMessageRequest,
+  ListAgentsRequest,
+  Message,
   PollMessagesRequest,
   PollMessagesResponse,
-  Peer,
-  Message,
+  RegisterAgentRequest,
+  RegisterAgentResponse,
+  SendMessageRequest,
+  SetSummaryRequest,
 } from "./shared/types.ts";
 
-const PORT = parseInt(process.env.CLAUDE_PEERS_PORT ?? "7899", 10);
-const DB_PATH = process.env.CLAUDE_PEERS_DB ?? `${process.env.HOME}/.claude-peers.db`;
+const PORT = getBrokerPort();
+const DB_PATH = getDbPath();
+const STALE_AGENT_MS = getStaleAgentMs();
+
+type AgentRow = {
+  id: string;
+  pid: number | null;
+  name: string;
+  kind: string;
+  transport: string;
+  cwd: string | null;
+  git_root: string | null;
+  tty: string | null;
+  summary: string;
+  capabilities: string;
+  metadata: string;
+  registered_at: string;
+  last_seen: string;
+};
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
 
 // --- Database setup ---
 
+mkdirSync(dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
 db.run("PRAGMA journal_mode = WAL");
 db.run("PRAGMA busy_timeout = 3000");
 
 db.run(`
-  CREATE TABLE IF NOT EXISTS peers (
+  CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
-    pid INTEGER NOT NULL,
-    cwd TEXT NOT NULL,
+    pid INTEGER,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    transport TEXT NOT NULL,
+    cwd TEXT,
     git_root TEXT,
     tty TEXT,
     summary TEXT NOT NULL DEFAULT '',
+    capabilities TEXT NOT NULL DEFAULT '[]',
+    metadata TEXT NOT NULL DEFAULT '{}',
     registered_at TEXT NOT NULL,
     last_seen TEXT NOT NULL
   )
@@ -53,60 +87,166 @@ db.run(`
     text TEXT NOT NULL,
     sent_at TEXT NOT NULL,
     delivered INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (from_id) REFERENCES peers(id),
-    FOREIGN KEY (to_id) REFERENCES peers(id)
+    FOREIGN KEY (from_id) REFERENCES agents(id),
+    FOREIGN KEY (to_id) REFERENCES agents(id)
   )
 `);
 
-// Clean up stale peers (PIDs that no longer exist) on startup
-function cleanStalePeers() {
-  const peers = db.query("SELECT id, pid FROM peers").all() as { id: string; pid: number }[];
-  for (const peer of peers) {
-    try {
-      // Check if process is still alive (signal 0 doesn't kill, just checks)
-      process.kill(peer.pid, 0);
-    } catch {
-      // Process doesn't exist, remove it
-      db.run("DELETE FROM peers WHERE id = ?", [peer.id]);
-      db.run("DELETE FROM messages WHERE to_id = ? AND delivered = 0", [peer.id]);
+// --- Helpers ---
+
+function normalizeText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeOptionalText(value: unknown): string | null {
+  const text = normalizeText(value);
+  return text.length > 0 ? text : null;
+}
+
+function normalizePid(value: unknown): number | null {
+  return Number.isInteger(value) && (value as number) > 0
+    ? (value as number)
+    : null;
+}
+
+function normalizeCapabilities(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const capabilities: string[] = [];
+
+  for (const item of value) {
+    const capability = normalizeText(item);
+    if (!capability || seen.has(capability)) {
+      continue;
     }
+    seen.add(capability);
+    capabilities.push(capability);
+  }
+
+  return capabilities;
+}
+
+function normalizeMetadata(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => key.trim().length > 0)
+  );
+}
+
+function parseJsonArray(value: string): string[] {
+  try {
+    return normalizeCapabilities(JSON.parse(value));
+  } catch {
+    return [];
   }
 }
 
-cleanStalePeers();
+function parseJsonObject(value: string): Record<string, unknown> {
+  try {
+    return normalizeMetadata(JSON.parse(value));
+  } catch {
+    return {};
+  }
+}
 
-// Periodically clean stale peers (every 30s)
-setInterval(cleanStalePeers, 30_000);
+function toAgent(row: AgentRow): Agent {
+  return {
+    ...row,
+    pid: row.pid ?? null,
+    cwd: row.cwd ?? null,
+    git_root: row.git_root ?? null,
+    tty: row.tty ?? null,
+    capabilities: parseJsonArray(row.capabilities),
+    metadata: parseJsonObject(row.metadata),
+  };
+}
+
+function deriveDefaultName(kind: string, cwd: string | null): string {
+  if (cwd) {
+    const leaf = cwd.split(/[\\/]/).filter(Boolean).at(-1);
+    if (leaf) {
+      return `${kind} @ ${leaf}`;
+    }
+  }
+
+  return kind;
+}
+
+function removeAgent(id: string) {
+  deleteAgent.run(id);
+  deleteMessagesForAgent.run(id, id);
+}
+
+function isAgentAlive(agent: Agent): boolean {
+  if (agent.pid !== null) {
+    try {
+      process.kill(agent.pid, 0);
+      return true;
+    } catch {
+      removeAgent(agent.id);
+      return false;
+    }
+  }
+
+  const lastSeen = Date.parse(agent.last_seen);
+  if (Number.isFinite(lastSeen) && Date.now() - lastSeen <= STALE_AGENT_MS) {
+    return true;
+  }
+
+  removeAgent(agent.id);
+  return false;
+}
 
 // --- Prepared statements ---
 
-const insertPeer = db.prepare(`
-  INSERT INTO peers (id, pid, cwd, git_root, tty, summary, registered_at, last_seen)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+const insertAgent = db.prepare(`
+  INSERT INTO agents (
+    id, pid, name, kind, transport, cwd, git_root, tty, summary,
+    capabilities, metadata, registered_at, last_seen
+  )
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const updateLastSeen = db.prepare(`
-  UPDATE peers SET last_seen = ? WHERE id = ?
+  UPDATE agents SET last_seen = ? WHERE id = ?
 `);
 
 const updateSummary = db.prepare(`
-  UPDATE peers SET summary = ? WHERE id = ?
+  UPDATE agents SET summary = ? WHERE id = ?
 `);
 
-const deletePeer = db.prepare(`
-  DELETE FROM peers WHERE id = ?
+const deleteAgent = db.prepare(`
+  DELETE FROM agents WHERE id = ?
 `);
 
-const selectAllPeers = db.prepare(`
-  SELECT * FROM peers
+const deleteMessagesForAgent = db.prepare(`
+  DELETE FROM messages WHERE to_id = ? OR from_id = ?
 `);
 
-const selectPeersByDirectory = db.prepare(`
-  SELECT * FROM peers WHERE cwd = ?
+const selectAllAgentRows = db.prepare(`
+  SELECT * FROM agents
 `);
 
-const selectPeersByGitRoot = db.prepare(`
-  SELECT * FROM peers WHERE git_root = ?
+const selectAgentRowsByDirectory = db.prepare(`
+  SELECT * FROM agents WHERE cwd = ?
+`);
+
+const selectAgentRowsByGitRoot = db.prepare(`
+  SELECT * FROM agents WHERE git_root = ?
+`);
+
+const selectAgentRowById = db.prepare(`
+  SELECT * FROM agents WHERE id = ?
+`);
+
+const selectAgentIdByPid = db.prepare(`
+  SELECT id FROM agents WHERE pid = ?
 `);
 
 const insertMessage = db.prepare(`
@@ -122,30 +262,67 @@ const markDelivered = db.prepare(`
   UPDATE messages SET delivered = 1 WHERE id = ?
 `);
 
-// --- Generate peer ID ---
+// --- Generate agent ID ---
 
 function generateId(): string {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
   let id = "";
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 8; i += 1) {
     id += chars[Math.floor(Math.random() * chars.length)];
   }
   return id;
 }
 
+// Clean up stale agents on startup and periodically.
+function cleanStaleAgents() {
+  const rows = selectAllAgentRows.all() as AgentRow[];
+  for (const row of rows) {
+    isAgentAlive(toAgent(row));
+  }
+}
+
+cleanStaleAgents();
+setInterval(cleanStaleAgents, 30_000);
+
 // --- Request handlers ---
 
-function handleRegister(body: RegisterRequest): RegisterResponse {
-  const id = generateId();
+function handleRegister(body: RegisterAgentRequest): RegisterAgentResponse {
   const now = new Date().toISOString();
+  const kind = normalizeText(body.kind) || "agent";
+  const transport = normalizeText(body.transport) || "http";
+  const pid = normalizePid(body.pid);
+  const cwd = normalizeOptionalText(body.cwd);
+  const gitRoot = normalizeOptionalText(body.git_root);
+  const tty = normalizeOptionalText(body.tty);
+  const summary = normalizeText(body.summary);
+  const capabilities = normalizeCapabilities(body.capabilities);
+  const metadata = normalizeMetadata(body.metadata);
+  const name = normalizeText(body.name) || deriveDefaultName(kind, cwd);
+  const id = generateId();
 
-  // Remove any existing registration for this PID (re-registration)
-  const existing = db.query("SELECT id FROM peers WHERE pid = ?").get(body.pid) as { id: string } | null;
-  if (existing) {
-    deletePeer.run(existing.id);
+  if (pid !== null) {
+    const existing = selectAgentIdByPid.get(pid) as { id: string } | null;
+    if (existing) {
+      removeAgent(existing.id);
+    }
   }
 
-  insertPeer.run(id, body.pid, body.cwd, body.git_root, body.tty, body.summary, now, now);
+  insertAgent.run(
+    id,
+    pid,
+    name,
+    kind,
+    transport,
+    cwd,
+    gitRoot,
+    tty,
+    summary,
+    JSON.stringify(capabilities),
+    JSON.stringify(metadata),
+    now,
+    now
+  );
+
   return { id };
 }
 
@@ -154,73 +331,94 @@ function handleHeartbeat(body: HeartbeatRequest): void {
 }
 
 function handleSetSummary(body: SetSummaryRequest): void {
-  updateSummary.run(body.summary, body.id);
+  updateSummary.run(normalizeText(body.summary), body.id);
 }
 
-function handleListPeers(body: ListPeersRequest): Peer[] {
-  let peers: Peer[];
+function handleListAgents(body: ListAgentsRequest): Agent[] {
+  let rows: AgentRow[];
 
   switch (body.scope) {
-    case "machine":
-      peers = selectAllPeers.all() as Peer[];
-      break;
     case "directory":
-      peers = selectPeersByDirectory.all(body.cwd) as Peer[];
+      rows = body.cwd
+        ? (selectAgentRowsByDirectory.all(body.cwd) as AgentRow[])
+        : [];
       break;
     case "repo":
-      if (body.git_root) {
-        peers = selectPeersByGitRoot.all(body.git_root) as Peer[];
-      } else {
-        // No git root, fall back to directory
-        peers = selectPeersByDirectory.all(body.cwd) as Peer[];
-      }
+      rows = body.git_root
+        ? (selectAgentRowsByGitRoot.all(body.git_root) as AgentRow[])
+        : body.cwd
+          ? (selectAgentRowsByDirectory.all(body.cwd) as AgentRow[])
+          : [];
       break;
+    case "machine":
     default:
-      peers = selectAllPeers.all() as Peer[];
+      rows = selectAllAgentRows.all() as AgentRow[];
+      break;
   }
 
-  // Exclude the requesting peer
+  let agents = rows.map(toAgent);
+
   if (body.exclude_id) {
-    peers = peers.filter((p) => p.id !== body.exclude_id);
+    agents = agents.filter((agent) => agent.id !== body.exclude_id);
   }
 
-  // Verify each peer's process is still alive
-  return peers.filter((p) => {
-    try {
-      process.kill(p.pid, 0);
-      return true;
-    } catch {
-      // Clean up dead peer
-      deletePeer.run(p.id);
-      return false;
-    }
-  });
+  if (body.kind) {
+    agents = agents.filter((agent) => agent.kind === body.kind);
+  }
+
+  if (body.capability) {
+    agents = agents.filter((agent) =>
+      agent.capabilities.includes(body.capability as string)
+    );
+  }
+
+  return agents
+    .filter(isAgentAlive)
+    .sort(
+      (left, right) =>
+        right.last_seen.localeCompare(left.last_seen) ||
+        left.name.localeCompare(right.name)
+    );
 }
 
 function handleSendMessage(body: SendMessageRequest): { ok: boolean; error?: string } {
-  // Verify target exists
-  const target = db.query("SELECT id FROM peers WHERE id = ?").get(body.to_id) as { id: string } | null;
+  const target = selectAgentRowById.get(body.to_id) as AgentRow | null;
   if (!target) {
-    return { ok: false, error: `Peer ${body.to_id} not found` };
+    return { ok: false, error: `Agent ${body.to_id} not found` };
   }
 
-  insertMessage.run(body.from_id, body.to_id, body.text, new Date().toISOString());
+  insertMessage.run(
+    body.from_id,
+    body.to_id,
+    normalizeText(body.text),
+    new Date().toISOString()
+  );
+
   return { ok: true };
 }
 
 function handlePollMessages(body: PollMessagesRequest): PollMessagesResponse {
   const messages = selectUndelivered.all(body.id) as Message[];
 
-  // Mark them as delivered
-  for (const msg of messages) {
-    markDelivered.run(msg.id);
+  for (const message of messages) {
+    markDelivered.run(message.id);
   }
 
   return { messages };
 }
 
 function handleUnregister(body: { id: string }): void {
-  deletePeer.run(body.id);
+  removeAgent(body.id);
+}
+
+function jsonResponse(body: unknown, init?: ResponseInit): Response {
+  return Response.json(body, {
+    ...init,
+    headers: {
+      ...CORS_HEADERS,
+      ...(init?.headers ?? {}),
+    },
+  });
 }
 
 // --- HTTP Server ---
@@ -232,11 +430,20 @@ Bun.serve({
     const url = new URL(req.url);
     const path = url.pathname;
 
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
     if (req.method !== "POST") {
       if (path === "/health") {
-        return Response.json({ status: "ok", peers: (selectAllPeers.all() as Peer[]).length });
+        const agents = handleListAgents({ scope: "machine" }).length;
+        return jsonResponse({ status: "ok", agents, peers: agents });
       }
-      return new Response("claude-peers broker", { status: 200 });
+
+      return new Response("claudy-talky broker", {
+        status: 200,
+        headers: CORS_HEADERS,
+      });
     }
 
     try {
@@ -244,30 +451,37 @@ Bun.serve({
 
       switch (path) {
         case "/register":
-          return Response.json(handleRegister(body as RegisterRequest));
+        case "/register-agent":
+          return jsonResponse(handleRegister(body as RegisterAgentRequest));
         case "/heartbeat":
           handleHeartbeat(body as HeartbeatRequest);
-          return Response.json({ ok: true });
+          return jsonResponse({ ok: true });
         case "/set-summary":
           handleSetSummary(body as SetSummaryRequest);
-          return Response.json({ ok: true });
+          return jsonResponse({ ok: true });
         case "/list-peers":
-          return Response.json(handleListPeers(body as ListPeersRequest));
+        case "/list-agents":
+          return jsonResponse(handleListAgents(body as ListAgentsRequest));
         case "/send-message":
-          return Response.json(handleSendMessage(body as SendMessageRequest));
+          return jsonResponse(handleSendMessage(body as SendMessageRequest));
         case "/poll-messages":
-          return Response.json(handlePollMessages(body as PollMessagesRequest));
+          return jsonResponse(handlePollMessages(body as PollMessagesRequest));
         case "/unregister":
           handleUnregister(body as { id: string });
-          return Response.json({ ok: true });
+          return jsonResponse({ ok: true });
+        case "/shutdown":
+          setTimeout(() => process.exit(0), 50);
+          return jsonResponse({ ok: true });
         default:
-          return Response.json({ error: "not found" }, { status: 404 });
+          return jsonResponse({ error: "not found" }, { status: 404 });
       }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return Response.json({ error: msg }, { status: 500 });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return jsonResponse({ error: message }, { status: 500 });
     }
   },
 });
 
-console.error(`[claude-peers broker] listening on 127.0.0.1:${PORT} (db: ${DB_PATH})`);
+console.error(
+  `[claudy-talky broker] listening on 127.0.0.1:${PORT} (db: ${DB_PATH})`
+);

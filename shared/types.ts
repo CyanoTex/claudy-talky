@@ -1,67 +1,84 @@
-// Unique ID for each Claude Code instance (generated on registration)
-export type PeerId = string;
+export type AgentId = string;
+export type DiscoveryScope = "machine" | "directory" | "repo";
 
-export interface Peer {
-  id: PeerId;
-  pid: number;
-  cwd: string;
+export interface Agent {
+  id: AgentId;
+  pid: number | null;
+  name: string;
+  kind: string;
+  transport: string;
+  cwd: string | null;
   git_root: string | null;
   tty: string | null;
   summary: string;
-  registered_at: string; // ISO timestamp
-  last_seen: string; // ISO timestamp
+  capabilities: string[];
+  metadata: Record<string, unknown>;
+  registered_at: string;
+  last_seen: string;
 }
 
 export interface Message {
   id: number;
-  from_id: PeerId;
-  to_id: PeerId;
+  from_id: AgentId;
+  to_id: AgentId;
   text: string;
-  sent_at: string; // ISO timestamp
+  sent_at: string;
   delivered: boolean;
 }
 
-// --- Broker API types ---
-
-export interface RegisterRequest {
-  pid: number;
-  cwd: string;
-  git_root: string | null;
-  tty: string | null;
-  summary: string;
+export interface RegisterAgentRequest {
+  pid?: number | null;
+  name?: string;
+  kind: string;
+  transport?: string;
+  cwd?: string | null;
+  git_root?: string | null;
+  tty?: string | null;
+  summary?: string;
+  capabilities?: string[];
+  metadata?: Record<string, unknown>;
 }
 
-export interface RegisterResponse {
-  id: PeerId;
+export interface RegisterAgentResponse {
+  id: AgentId;
 }
 
 export interface HeartbeatRequest {
-  id: PeerId;
+  id: AgentId;
 }
 
 export interface SetSummaryRequest {
-  id: PeerId;
+  id: AgentId;
   summary: string;
 }
 
-export interface ListPeersRequest {
-  scope: "machine" | "directory" | "repo";
-  // The requesting peer's context (used for filtering)
-  cwd: string;
-  git_root: string | null;
-  exclude_id?: PeerId;
+export interface ListAgentsRequest {
+  scope: DiscoveryScope;
+  cwd?: string | null;
+  git_root?: string | null;
+  kind?: string;
+  capability?: string;
+  exclude_id?: AgentId;
 }
 
 export interface SendMessageRequest {
-  from_id: PeerId;
-  to_id: PeerId;
+  from_id: AgentId;
+  to_id: AgentId;
   text: string;
 }
 
 export interface PollMessagesRequest {
-  id: PeerId;
+  id: AgentId;
 }
 
 export interface PollMessagesResponse {
   messages: Message[];
 }
+
+// Legacy aliases so older integrations can continue compiling against the
+// upstream claude-peers names while the repo evolves toward generic agents.
+export type PeerId = AgentId;
+export type Peer = Agent;
+export type RegisterRequest = RegisterAgentRequest;
+export type RegisterResponse = RegisterAgentResponse;
+export type ListPeersRequest = ListAgentsRequest;

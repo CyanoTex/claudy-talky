@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "claudy-talky-gemini": {
+      "command": "bun",
+      "args": ["./google-server.ts", "--client", "gemini"],
+      "cwd": ".",
+      "timeout": 600000,
+      "trust": false
+    }
+  }
+}

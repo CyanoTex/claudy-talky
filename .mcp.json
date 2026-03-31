@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "claude-peers": {
+    "claudy-talky": {
       "command": "bun",
       "args": ["./server.ts"]
     }

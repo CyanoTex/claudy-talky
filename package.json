@@ -1,13 +1,19 @@
 {
-  "name": "claude-peers",
-  "version": "0.1.0",
-  "description": "Peer discovery and messaging for Claude Code instances",
+  "name": "claudy-talky",
+  "version": "0.4.0",
+  "description": "Let Claude Code talk to any local agent through a shared broker",
   "module": "index.ts",
   "type": "module",
   "private": true,
   "scripts": {
     "broker": "bun broker.ts",
     "server": "bun server.ts",
+    "server:codex": "bun codex-server.ts",
+    "server:google": "bun google-server.ts",
+    "server:gemini": "bun google-server.ts --client gemini",
+    "server:antigravity": "bun google-server.ts --client antigravity",
+    "agents": "bun cli.ts agents",
+    "example:http-agent": "bun examples/http-agent.ts",
     "test": "bun test"
   },
   "devDependencies": {

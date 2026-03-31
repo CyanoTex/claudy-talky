@@ -1,11 +1,15 @@
 /**
- * claude-peers
+ * claudy-talky
  *
- * Peer discovery and messaging for Claude Code instances.
+ * A local broker + MCP adapter that lets Claude Code talk to any connected
+ * agent, not just other Claude sessions.
  *
- * This package has two entry points:
- *   - server.ts  — MCP server (spawned by Claude Code, one per instance)
- *   - broker.ts  — Shared broker daemon (auto-launched, one per machine)
+ * Entry points:
+ *   - server.ts  — Claude-facing MCP adapter
+ *   - codex-server.ts — Codex-facing MCP adapter
+ *   - google-server.ts — Gemini CLI / Antigravity MCP adapter
+ *   - broker.ts  — Shared localhost broker daemon
+ *   - cli.ts     — Local inspection and messaging utility
  *
  * See README.md for setup and usage.
  */

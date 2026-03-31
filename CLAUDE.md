@@ -1,141 +1,66 @@
 ---
-description: Use Bun instead of Node.js, npm, pnpm, or vite.
+description: Use Bun for the claudy-talky broker, MCP adapter, and example agents.
 globs: "*.ts, *.tsx, *.html, *.css, *.js, *.jsx, package.json"
 alwaysApply: false
 ---
 
-# claude-peers
+# claudy-talky
 
-Peer discovery and messaging MCP channel for Claude Code instances.
+Claude-facing MCP adapter plus a generic local agent broker.
 
 ## Architecture
 
-- `broker.ts` — Singleton HTTP daemon on localhost:7899 + SQLite. Auto-launched by the MCP server.
-- `server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker, exposes tools, pushes channel notifications.
-- `shared/types.ts` — Shared TypeScript types for broker API.
-- `shared/summarize.ts` — Auto-summary generation via gpt-5.4-nano.
-- `cli.ts` — CLI utility for inspecting broker state.
+- `broker.ts` runs the localhost SQLite-backed broker and HTTP API.
+- `server.ts` registers Claude Code as an agent and exposes MCP tools.
+- `codex-server.ts` registers Codex as an agent and exposes the same broker tools with manual message polling.
+- `google-server.ts` registers Gemini CLI or Antigravity as an agent and exposes the same broker tools with manual message polling.
+- `cli.ts` inspects agents and sends local messages.
+- `examples/http-agent.ts` demonstrates a non-Claude agent joining via HTTP.
+- `shared/types.ts` defines the common protocol types.
+- `shared/config.ts` holds environment-variable config and legacy fallbacks.
+- `shared/polling-adapter.ts` is the shared helper for non-Claude polling adapters.
+- `.codex/config.toml` gives this repo a project-scoped Codex MCP registration.
+- `.gemini/settings.json` gives this repo a project-scoped Gemini MCP registration.
+- `antigravity.mcp_config.json` is a copy-paste Antigravity raw MCP config example.
 
 ## Running
 
 ```bash
-# Start Claude Code with the channel:
-claude --dangerously-load-development-channels server:claude-peers
+# Install dependencies
+bun install
 
-# Or just add to .mcp.json and use as regular MCP (no channel push, but tools work):
-# { "claude-peers": { "command": "bun", "args": ["./server.ts"] } }
+# Start the Claude-facing MCP server directly
+bun server.ts
 
-# CLI:
+# Start the Codex-facing MCP server directly
+bun codex-server.ts
+
+# Start the Gemini/Antigravity-facing MCP server directly
+bun google-server.ts
+bun google-server.ts --client antigravity
+
+# Run the local CLI
 bun cli.ts status
-bun cli.ts peers
-bun cli.ts send <peer-id> <message>
-bun cli.ts kill-broker
+bun cli.ts agents
+
+# Run the example non-Claude agent
+bun examples/http-agent.ts
 ```
 
 ## Bun
 
-Default to using Bun instead of Node.js.
+Default to Bun instead of Node.js tooling.
 
-- Use `bun <file>` instead of `node <file>` or `ts-node <file>`
-- Use `bun test` instead of `jest` or `vitest`
-- Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
-- Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
-- Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
-- Use `bunx <package> <command>` instead of `npx <package> <command>`
-- Bun automatically loads .env, so don't use dotenv.
+- Use `bun <file>` instead of `node <file>`
+- Use `bun install` instead of `npm install` or `pnpm install`
+- Use `bun test` for tests
+- Prefer `Bun.serve`, `bun:sqlite`, and built-in `fetch`
 
-## APIs
+## Focus
 
-- `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
-- `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
-- `Bun.redis` for Redis. Don't use `ioredis`.
-- `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
-- `WebSocket` is built-in. Don't use `ws`.
-- Prefer `Bun.file` over `node:fs`'s readFile/writeFile
-- Bun.$`ls` instead of execa.
+When editing this repo:
 
-## Testing
-
-Use `bun test` to run tests.
-
-```ts#index.test.ts
-import { test, expect } from "bun:test";
-
-test("hello world", () => {
-  expect(1).toBe(1);
-});
-```
-
-## Frontend
-
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
-
-Server:
-
-```ts#index.ts
-import index from "./index.html"
-
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
-```
-
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
-
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
-
-With the following `frontend.tsx`:
-
-```tsx#frontend.tsx
-import React from "react";
-import { createRoot } from "react-dom/client";
-
-// import .css files directly and it works
-import './index.css';
-
-const root = createRoot(document.body);
-
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
-
-root.render(<Frontend />);
-```
-
-Then, run index.ts
-
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
+- preserve the generic "agent" model in shared protocol code
+- keep Claude-specific behavior inside `server.ts`
+- prefer cross-platform process handling over Unix-only shell commands
+- keep the broker localhost-only unless explicitly changing that design

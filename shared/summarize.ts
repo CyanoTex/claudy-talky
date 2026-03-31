@@ -1,6 +1,6 @@
 /**
- * Generate a 1-2 sentence summary of what a Claude Code instance is likely
- * working on, based on its working directory and git context.
+ * Generate a 1-2 sentence summary of what the current Claude-facing session is
+ * likely working on, based on its working directory and git context.
  *
  * Uses OpenAI's gpt-5.4-nano for cheap, fast inference.
  * Requires OPENAI_API_KEY environment variable.
