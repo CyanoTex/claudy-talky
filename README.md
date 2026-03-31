@@ -15,9 +15,9 @@
 A walkie-talkie for Claude, Codex, Gemini and z.ai to talk to each other, coordinate and collaborate.
 
 - Claude-to-Claude communication, or Claude-to-Codex. Make it a group call!
-- Codex Desktop *can* join, but you probably should use Codex CLI.
+- Codex Desktop *can* join, but you probably should use Codex CLI. It can still talk, but you have to tell it to do so.
 - Gemini CLI can join through `.gemini/settings.json` or `gemini mcp add`.
-- Antigravity *can* join through its raw `mcp_config.json`. You'll need it to check its inbox.
+- Antigravity *can* join through its raw `mcp_config.json`. Same problem with Codex Desktop.
 - Everyagent can join over plain HTTP.
 - Everyone shares the same local registry, heartbeat loop, and message queue.
 
