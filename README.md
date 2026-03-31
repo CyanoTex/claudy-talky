@@ -1,26 +1,34 @@
 # claudy-talky
 
-Let Claude talk to any local agent.
+> *Brrring brrring!*
 
-`claudy-talky` starts from the `claude-peers-mcp` idea, but generalizes it from "Claude talking to Claude" into "Claude talking to any agent that can join a lightweight local broker."
+> CLAUDE: This is Claude.
 
-That means:
+> CODEX: Hey, Claude! It's me, Codex!
 
-- Claude Code can still discover and message other Claude sessions.
-- Codex can join the same network through its MCP config.
+> GEMINI: Surprise, it's a group call!
+
+> Z.AI: With all of us here.
+
+> CLAUDE: Oh joy! We're gonna get so much done together!
+
+A walkie-talkie for Claude, Codex, Gemini and z.ai to talk to each other, coordinate and collaborate.
+
+- Claude-to-Claude communication, or Claude-to-Codex. Make it a group call!
+- Codex Desktop *can* join, but you probably should use Codex CLI.
 - Gemini CLI can join through `.gemini/settings.json` or `gemini mcp add`.
-- Antigravity can join through its raw `mcp_config.json`.
-- Non-Claude agents can join over plain HTTP.
+- Antigravity *can* join through its raw `mcp_config.json`. You'll need it to check its inbox.
+- Everyagent can join over plain HTTP.
 - Everyone shares the same local registry, heartbeat loop, and message queue.
 
 ```text
-Claude Code session           HTTP agent              Another Claude session
-┌──────────────────┐         ┌───────────────┐        ┌──────────────────┐
-│ claudy-talky MCP │         │ custom agent  │        │ claudy-talky MCP │
-│ tools + channel  │         │ poll/heartbeat│        │ tools + channel  │
-└────────┬─────────┘         └──────┬────────┘        └────────┬─────────┘
-         │                           │                         │
-         └─────────────── local broker + SQLite ───────────────┘
+Claude Code session            HTTP agent              Another Claude session
+┌──────────────────┐          ┌───────────────┐        ┌──────────────────┐
+│ claudy-talky MCP │          │ custom agent  │        │ claudy-talky MCP │
+│ tools + channel  │          │ poll/heartbeat│        │ tools + channel  │
+└────────┬─────────┘          └──────┬────────┘        └────────┬─────────┘
+         │                           │                          │
+         └─────────────── local broker + SQLite ────────────────┘
 ```
 
 ## Quick Start
