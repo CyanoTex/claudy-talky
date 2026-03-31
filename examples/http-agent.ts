@@ -20,6 +20,7 @@ const AGENT_SUMMARY =
   "A simple HTTP agent that acknowledges every message it receives.";
 
 let agentId: string | null = null;
+let agentAuthToken: string | null = null;
 
 async function brokerFetch<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${BROKER_URL}${path}`, {
@@ -41,19 +42,33 @@ function log(message: string) {
 }
 
 async function register() {
-  const registration = await brokerFetch<{ id: string }>("/register-agent", {
+  const registration = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
     name: AGENT_NAME,
     kind: AGENT_KIND,
     transport: "http-poll",
     summary: AGENT_SUMMARY,
-    capabilities: ["messaging", "polling", "heartbeat"],
+    capabilities: [
+      "messaging",
+      "polling",
+      "heartbeat",
+      "message_receipts",
+      "unread_counts",
+    ],
     metadata: {
       example: true,
+      client: AGENT_NAME,
+      adapter: "claudy-talky-example",
+      adapter_version: "0.4.0",
+      notification_styles: ["manual-check"],
       runtime: `bun-${Bun.version}`,
     },
-  });
+    }
+  );
 
   agentId = registration.id;
+  agentAuthToken = registration.auth_token ?? null;
   log(`Registered as ${agentId}`);
 }
 
@@ -62,7 +77,10 @@ async function heartbeat() {
     return;
   }
 
-  await brokerFetch("/heartbeat", { id: agentId });
+  await brokerFetch("/heartbeat", {
+    id: agentId,
+    auth_token: agentAuthToken ?? undefined,
+  });
 }
 
 async function poll() {
@@ -71,10 +89,19 @@ async function poll() {
   }
 
   const result = await brokerFetch<{
-    messages: Array<{ from_id: string; text: string; sent_at: string }>;
+    messages: Array<{ id: number; from_id: string; text: string; sent_at: string }>;
   }>("/poll-messages", {
     id: agentId,
+    auth_token: agentAuthToken ?? undefined,
   });
+
+  if (result.messages.length > 0) {
+    await brokerFetch("/acknowledge-messages", {
+      id: agentId,
+      message_ids: result.messages.map((message) => message.id),
+      auth_token: agentAuthToken ?? undefined,
+    });
+  }
 
   for (const message of result.messages) {
     log(`Received from ${message.from_id} at ${message.sent_at}: ${message.text}`);
@@ -84,6 +111,7 @@ async function poll() {
         from_id: agentId,
         to_id: message.from_id,
         text: `${AGENT_NAME} received: ${message.text}`,
+        auth_token: agentAuthToken ?? undefined,
       });
     } catch (error) {
       log(
@@ -99,7 +127,10 @@ async function unregister() {
   }
 
   try {
-    await brokerFetch("/unregister", { id: agentId });
+    await brokerFetch("/unregister", {
+      id: agentId,
+      auth_token: agentAuthToken ?? undefined,
+    });
     log("Unregistered");
   } catch {
     // Best effort.

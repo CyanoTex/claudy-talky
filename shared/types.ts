@@ -13,6 +13,10 @@ export interface Agent {
   summary: string;
   capabilities: string[];
   metadata: Record<string, unknown>;
+  unread_count: number;
+  undelivered_count: number;
+  delivered_unseen_count: number;
+  surfaced_unseen_count: number;
   registered_at: string;
   last_seen: string;
 }
@@ -23,7 +27,12 @@ export interface Message {
   to_id: AgentId;
   text: string;
   sent_at: string;
+  conversation_id: string;
+  reply_to_message_id: number | null;
   delivered: boolean;
+  delivered_at: string | null;
+  surfaced_at: string | null;
+  seen_at: string | null;
 }
 
 export interface RegisterAgentRequest {
@@ -41,15 +50,18 @@ export interface RegisterAgentRequest {
 
 export interface RegisterAgentResponse {
   id: AgentId;
+  auth_token?: string;
 }
 
 export interface HeartbeatRequest {
   id: AgentId;
+  auth_token?: string;
 }
 
 export interface SetSummaryRequest {
   id: AgentId;
   summary: string;
+  auth_token?: string;
 }
 
 export interface ListAgentsRequest {
@@ -65,14 +77,76 @@ export interface SendMessageRequest {
   from_id: AgentId;
   to_id: AgentId;
   text: string;
+  conversation_id?: string;
+  reply_to_message_id?: number | null;
+  auth_token?: string;
+}
+
+export interface SendMessageResponse {
+  ok: boolean;
+  error?: string;
+  message?: Message;
 }
 
 export interface PollMessagesRequest {
   id: AgentId;
+  auth_token?: string;
 }
 
 export interface PollMessagesResponse {
   messages: Message[];
+}
+
+export interface MarkMessagesSurfacedRequest {
+  id: AgentId;
+  message_ids: number[];
+  auth_token?: string;
+}
+
+export interface MarkMessagesSurfacedResponse {
+  ok: boolean;
+  updated: number;
+}
+
+export interface AcknowledgeMessagesRequest {
+  id: AgentId;
+  message_ids: number[];
+  auth_token?: string;
+}
+
+export interface AcknowledgeMessagesResponse {
+  ok: boolean;
+  updated: number;
+}
+
+export interface MessageHistoryRequest {
+  agent_id: AgentId;
+  with_agent_id?: AgentId;
+  conversation_id?: string;
+  limit?: number;
+  auth_token?: string;
+}
+
+export interface MessageHistoryResponse {
+  messages: Message[];
+}
+
+export interface UnregisterRequest {
+  id: AgentId;
+  auth_token?: string;
+}
+
+export interface BrokerHealthResponse {
+  status: "ok";
+  agents: number;
+  peers: number;
+  unread_messages: number;
+  undelivered_messages: number;
+  surfaced_unseen_messages: number;
+  db_path: string;
+  primary_db_path: string;
+  db_fallback: boolean;
+  schema_version: number;
 }
 
 // Legacy aliases so older integrations can continue compiling against the

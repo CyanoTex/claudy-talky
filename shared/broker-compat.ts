@@ -1,7 +1,13 @@
 import { basename } from "node:path";
 import type {
+  AcknowledgeMessagesRequest,
+  AcknowledgeMessagesResponse,
   Agent,
   ListAgentsRequest,
+  MarkMessagesSurfacedRequest,
+  MarkMessagesSurfacedResponse,
+  MessageHistoryRequest,
+  MessageHistoryResponse,
   RegisterAgentRequest,
   RegisterAgentResponse,
 } from "./types.ts";
@@ -47,6 +53,10 @@ function toAgent(entry: Agent | LegacyPeer): Agent {
       cwd: entry.cwd ?? null,
       git_root: entry.git_root ?? null,
       tty: entry.tty ?? null,
+      unread_count: entry.unread_count ?? 0,
+      undelivered_count: entry.undelivered_count ?? 0,
+      delivered_unseen_count: entry.delivered_unseen_count ?? 0,
+      surfaced_unseen_count: entry.surfaced_unseen_count ?? 0,
     };
   }
 
@@ -64,6 +74,10 @@ function toAgent(entry: Agent | LegacyPeer): Agent {
     summary: entry.summary ?? "",
     capabilities: ["messaging", "directory_scope", "repo_scope", "summary"],
     metadata: { legacyBroker: true },
+    unread_count: 0,
+    undelivered_count: 0,
+    delivered_unseen_count: 0,
+    surfaced_unseen_count: 0,
     registered_at: entry.registered_at,
     last_seen: entry.last_seen,
   };
@@ -135,5 +149,62 @@ export async function listAgentsCompatible(
     }
 
     return agents;
+  }
+}
+
+export async function acknowledgeMessagesCompatible(
+  brokerUrl: string,
+  body: AcknowledgeMessagesRequest
+): Promise<AcknowledgeMessagesResponse> {
+  try {
+    return await brokerFetch<AcknowledgeMessagesResponse>(
+      brokerUrl,
+      "/acknowledge-messages",
+      body
+    );
+  } catch (error) {
+    if (!(error instanceof BrokerApiError) || error.status !== 404) {
+      throw error;
+    }
+
+    return { ok: true, updated: 0 };
+  }
+}
+
+export async function markMessagesSurfacedCompatible(
+  brokerUrl: string,
+  body: MarkMessagesSurfacedRequest
+): Promise<MarkMessagesSurfacedResponse> {
+  try {
+    return await brokerFetch<MarkMessagesSurfacedResponse>(
+      brokerUrl,
+      "/mark-messages-surfaced",
+      body
+    );
+  } catch (error) {
+    if (!(error instanceof BrokerApiError) || error.status !== 404) {
+      throw error;
+    }
+
+    return { ok: true, updated: 0 };
+  }
+}
+
+export async function messageHistoryCompatible(
+  brokerUrl: string,
+  body: MessageHistoryRequest
+): Promise<MessageHistoryResponse> {
+  try {
+    return await brokerFetch<MessageHistoryResponse>(
+      brokerUrl,
+      "/message-history",
+      body
+    );
+  } catch (error) {
+    if (!(error instanceof BrokerApiError) || error.status !== 404) {
+      throw error;
+    }
+
+    return { messages: [] };
   }
 }

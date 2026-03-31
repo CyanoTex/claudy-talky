@@ -12,21 +12,15 @@
  *   bun cli.ts kill-broker       Stop the broker daemon
  */
 
+import { formatAgent } from "./shared/agent-format.ts";
 import { getBrokerPort } from "./shared/config.ts";
-
-type Agent = {
-  id: string;
-  name: string;
-  kind: string;
-  transport: string;
-  pid: number | null;
-  cwd: string | null;
-  git_root: string | null;
-  tty: string | null;
-  summary: string;
-  capabilities: string[];
-  last_seen: string;
-};
+import type {
+  Agent,
+  BrokerHealthResponse,
+  RegisterAgentResponse,
+  SendMessageResponse,
+  UnregisterRequest,
+} from "./shared/types.ts";
 
 const BROKER_PORT = getBrokerPort();
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
@@ -53,22 +47,22 @@ async function brokerFetch<T>(path: string, body?: unknown): Promise<T> {
 }
 
 function printAgent(agent: Agent) {
-  console.log(`${agent.id}  ${agent.name}`);
-  console.log(`  Kind: ${agent.kind}`);
-  console.log(`  Transport: ${agent.transport}`);
-  if (agent.pid !== null) {
-    console.log(`  PID: ${agent.pid}`);
-  }
-  if (agent.cwd) {
-    console.log(`  CWD: ${agent.cwd}`);
-  }
-  if (agent.summary) {
-    console.log(`  Summary: ${agent.summary}`);
-  }
-  if (agent.capabilities.length > 0) {
-    console.log(`  Capabilities: ${agent.capabilities.join(", ")}`);
-  }
-  console.log(`  Last seen: ${agent.last_seen}`);
+  console.log(formatAgent(agent));
+}
+
+async function registerCliAgent(): Promise<RegisterAgentResponse> {
+  return brokerFetch<RegisterAgentResponse>("/register-agent", {
+    name: "claudy-talky CLI",
+    kind: "cli-client",
+    transport: "cli",
+    summary: "Ephemeral CLI operator session.",
+    capabilities: ["messaging", "ephemeral"],
+    metadata: {
+      client: "claudy-talky CLI",
+      adapter: "claudy-talky",
+      notification_styles: ["stdout"],
+    },
+  });
 }
 
 const command = process.argv[2];
@@ -76,9 +70,14 @@ const command = process.argv[2];
 switch (command) {
   case "status": {
     try {
-      const health = await brokerFetch<{ status: string; agents: number }>("/health");
+      const health = await brokerFetch<BrokerHealthResponse>("/health");
       console.log(`Broker: ${health.status} (${health.agents} agent(s) connected)`);
       console.log(`URL: ${BROKER_URL}`);
+      console.log(`Schema: v${health.schema_version}`);
+      console.log(`DB: ${health.db_path}${health.db_fallback ? ` (fallback from ${health.primary_db_path})` : ""}`);
+      console.log(
+        `Messages: ${health.unread_messages} unread, ${health.undelivered_messages} pending delivery`
+      );
 
       if (health.agents > 0) {
         const agents = await brokerFetch<Agent[]>("/list-agents", {
@@ -125,23 +124,37 @@ switch (command) {
       process.exit(1);
     }
 
+    let cliAgent: RegisterAgentResponse | null = null;
+
     try {
-      const result = await brokerFetch<{ ok: boolean; error?: string }>(
-        "/send-message",
-        {
-          from_id: "cli",
-          to_id: toId,
-          text: message,
-        }
-      );
+      cliAgent = await registerCliAgent();
+      const result = await brokerFetch<SendMessageResponse>("/send-message", {
+        from_id: cliAgent.id,
+        to_id: toId,
+        text: message,
+        auth_token: cliAgent.auth_token,
+      });
 
       if (result.ok) {
-        console.log(`Message sent to ${toId}`);
+        console.log(
+          `Message sent to ${toId}${result.message ? ` (message #${result.message.id})` : ""}`
+        );
       } else {
         console.error(`Failed: ${result.error}`);
       }
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (cliAgent) {
+        try {
+          await brokerFetch<{ ok: boolean }>("/unregister", {
+            id: cliAgent.id,
+            auth_token: cliAgent.auth_token,
+          } satisfies UnregisterRequest);
+        } catch {
+          // Best effort.
+        }
+      }
     }
     break;
   }

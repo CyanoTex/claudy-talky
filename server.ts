@@ -21,23 +21,29 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { buildAgentMetadata } from "./shared/agent-metadata.ts";
+import { formatAgent } from "./shared/agent-format.ts";
+import {
+  acknowledgeMessagesCompatible,
+  brokerFetch,
+  listAgentsCompatible,
+  markMessagesSurfacedCompatible,
+  messageHistoryCompatible,
+  registerAgentCompatible,
+} from "./shared/broker-compat.ts";
 import { getBrokerPort } from "./shared/config.ts";
-import type {
-  Agent,
-  AgentId,
-  PollMessagesResponse,
-  RegisterAgentResponse,
-} from "./shared/types.ts";
 import {
   generateSummary,
   getGitBranch,
   getRecentFiles,
 } from "./shared/summarize.ts";
-import {
-  brokerFetch,
-  listAgentsCompatible,
-  registerAgentCompatible,
-} from "./shared/broker-compat.ts";
+import type {
+  Agent,
+  AgentId,
+  Message,
+  PollMessagesResponse,
+  SendMessageResponse,
+} from "./shared/types.ts";
 
 const BROKER_PORT = getBrokerPort();
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
@@ -123,42 +129,76 @@ function defaultClaudeName(cwd: string): string {
   return leaf ? `Claude Code @ ${leaf}` : "Claude Code";
 }
 
-function formatAgent(agent: Agent): string {
-  const parts = [
-    `ID: ${agent.id}`,
-    `Name: ${agent.name}`,
-    `Kind: ${agent.kind}`,
-    `Transport: ${agent.transport}`,
-  ];
-
-  if (agent.cwd) {
-    parts.push(`CWD: ${agent.cwd}`);
-  }
-  if (agent.git_root) {
-    parts.push(`Repo: ${agent.git_root}`);
-  }
-  if (agent.capabilities.length > 0) {
-    parts.push(`Capabilities: ${agent.capabilities.join(", ")}`);
-  }
-  if (agent.summary) {
-    parts.push(`Summary: ${agent.summary}`);
-  }
-  if (agent.tty) {
-    parts.push(`TTY: ${agent.tty}`);
-  }
-
-  const metadataKeys = Object.keys(agent.metadata);
-  if (metadataKeys.length > 0) {
-    parts.push(`Metadata keys: ${metadataKeys.join(", ")}`);
-  }
-
-  parts.push(`Last seen: ${agent.last_seen}`);
-  return parts.join("\n  ");
-}
+type BufferedInboxMessage = {
+  message: PollMessagesResponse["messages"][number];
+  sender: Agent | null;
+};
 
 let myId: AgentId | null = null;
+let myAuthToken: string | null = null;
 let myCwd = process.cwd();
 let myGitRoot: string | null = null;
+let bufferedInbox: BufferedInboxMessage[] = [];
+let inboxSyncPromise: Promise<void> | null = null;
+
+function withAuth<T extends object>(body: T): T & { auth_token?: string } {
+  return myAuthToken ? { ...body, auth_token: myAuthToken } : body;
+}
+
+function appendMessageStateLines(lines: string[], message: Message) {
+  lines.push(`Conversation: ${message.conversation_id}`);
+
+  if (message.reply_to_message_id !== null) {
+    lines.push(`Reply to message #${message.reply_to_message_id}`);
+  }
+
+  if (message.delivered_at) {
+    lines.push(`Delivered to inbox at ${message.delivered_at}`);
+  }
+
+  if (message.surfaced_at) {
+    lines.push(`Surfaced to client at ${message.surfaced_at}`);
+  }
+
+  if (message.seen_at) {
+    lines.push(`Marked seen at ${message.seen_at}`);
+  }
+}
+
+function formatBufferedMessage(entry: BufferedInboxMessage): string {
+  const { message, sender } = entry;
+  const label = sender
+    ? `${sender.name} (${sender.kind}, ${message.from_id})`
+    : message.from_id;
+  const details = [`Message #${message.id} from ${label} at ${message.sent_at}:`, message.text];
+  appendMessageStateLines(details, message);
+  return details.join("\n");
+}
+
+function formatHistoryMessage(
+  message: Message,
+  agentsById: Map<AgentId, Agent>,
+  selfId: AgentId
+): string {
+  const otherId = message.from_id === selfId ? message.to_id : message.from_id;
+  const otherAgent = agentsById.get(otherId);
+  const direction =
+    message.from_id === selfId
+      ? `You -> ${otherAgent?.name ?? otherId}`
+      : `${otherAgent?.name ?? message.from_id} -> you`;
+  const details = [`Message #${message.id} ${direction} at ${message.sent_at}:`, message.text];
+  appendMessageStateLines(details, message);
+  return details.join("\n");
+}
+
+async function listAgentsById(): Promise<Map<AgentId, Agent>> {
+  const agents = await listAgentsCompatible(BROKER_URL, {
+    scope: "machine",
+    cwd: myCwd,
+    git_root: myGitRoot,
+  });
+  return new Map(agents.map((agent) => [agent.id, agent]));
+}
 
 const mcp = new Server(
   { name: "claudy-talky", version: "0.4.0" },
@@ -171,11 +211,12 @@ const mcp = new Server(
 
 IMPORTANT: When you receive a <channel source="claudy-talky" ...> message, RESPOND IMMEDIATELY when a reply is appropriate. Do not wait until your current task is finished. Pause, reply with send_message, then resume your work.
 
-Read the from_id, from_name, from_kind, from_summary, and from_cwd attributes to understand who sent the message. Reply by calling send_message with their from_id.
+Read the from_id, from_name, from_kind, from_summary, and from_cwd attributes to understand who sent the message. Channel metadata also includes message_id, conversation_id, and reply_to_message_id. Reply by calling send_message with their from_id, and use reply_to_message_id or conversation_id when you want to stay in the same thread.
 
 Available tools:
 - list_agents: Discover other connected agents on this machine
 - send_message: Send a message to another agent by ID
+- message_history: Revisit recent messages or a specific conversation
 - set_summary: Set a 1-2 sentence summary of what you're working on
 - check_messages: Manually check for new messages
 
@@ -200,7 +241,7 @@ const LIST_AGENTS_SCHEMA = {
     capability: {
       type: "string" as const,
       description:
-        'Optional capability filter, such as "messaging", "channel_notifications", or "tool_use".',
+        'Optional capability filter, such as "messaging", "channel_notifications", "message_receipts", or "tool_use".',
     },
   },
   required: ["scope"],
@@ -210,7 +251,7 @@ const TOOLS = [
   {
     name: "list_agents",
     description:
-      "List other connected agents. Returns their ID, name, kind, transport, working directory, repo, and summary.",
+      "List other connected agents. Returns their ID, name, kind, transport, working directory, repo, inbox counts, and summary.",
     inputSchema: LIST_AGENTS_SCHEMA,
   },
   {
@@ -234,8 +275,40 @@ const TOOLS = [
           type: "string" as const,
           description: "The message to send",
         },
+        conversation_id: {
+          type: "string" as const,
+          description:
+            "Optional conversation ID to continue an existing thread without replying to a specific message.",
+        },
+        reply_to_message_id: {
+          type: "number" as const,
+          description:
+            "Optional message ID to reply to. This keeps the reply inside the original conversation automatically.",
+        },
       },
       required: ["to_id", "message"],
+    },
+  },
+  {
+    name: "message_history",
+    description:
+      "Show recent messages from your inbox history. Filter by agent ID or conversation ID to revisit a thread.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        with_agent_id: {
+          type: "string" as const,
+          description: "Optional other agent ID to limit history to one participant.",
+        },
+        conversation_id: {
+          type: "string" as const,
+          description: "Optional conversation ID to limit history to one thread.",
+        },
+        limit: {
+          type: "number" as const,
+          description: "Maximum number of messages to return. Defaults to 20.",
+        },
+      },
     },
   },
   {
@@ -327,7 +400,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case "send_message": {
-      const { to_id, message } = args as { to_id: string; message: string };
+      const { to_id, message, conversation_id, reply_to_message_id } = args as {
+        to_id: string;
+        message: string;
+        conversation_id?: string;
+        reply_to_message_id?: number;
+      };
       if (!myId) {
         return {
           content: [{ type: "text" as const, text: "Not registered with broker yet" }],
@@ -336,14 +414,16 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       try {
-        const result = await brokerFetch<{ ok: boolean; error?: string }>(
+        const result = await brokerFetch<SendMessageResponse>(
           BROKER_URL,
           "/send-message",
-          {
+          withAuth({
             from_id: myId,
             to_id,
             text: message,
-          }
+            conversation_id,
+            reply_to_message_id,
+          })
         );
 
         if (!result.ok) {
@@ -362,7 +442,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text" as const,
-              text: `Message sent to agent ${to_id}`,
+              text: `Message sent to agent ${to_id}${result.message ? ` (message #${result.message.id}, conversation ${result.message.conversation_id}${result.message.reply_to_message_id !== null ? `, reply to #${result.message.reply_to_message_id}` : ""})` : ""}`,
             },
           ],
         };
@@ -372,6 +452,61 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text" as const,
               text: `Error sending message: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "message_history": {
+      if (!myId) {
+        return {
+          content: [{ type: "text" as const, text: "Not registered with broker yet" }],
+          isError: true,
+        };
+      }
+
+      try {
+        const { with_agent_id, conversation_id, limit } = args as {
+          with_agent_id?: string;
+          conversation_id?: string;
+          limit?: number;
+        };
+
+        const result = await messageHistoryCompatible(
+          BROKER_URL,
+          withAuth({
+            agent_id: myId,
+            with_agent_id,
+            conversation_id,
+            limit,
+          })
+        );
+
+        if (result.messages.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "No matching messages found." }],
+          };
+        }
+
+        const agentsById = await listAgentsById();
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `${result.messages.length} message(s):\n\n${result.messages
+                .map((message) => formatHistoryMessage(message, agentsById, myId!))
+                .join("\n\n---\n\n")}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error loading history: ${error instanceof Error ? error.message : String(error)}`,
             },
           ],
           isError: true,
@@ -389,7 +524,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       try {
-        await brokerFetch(BROKER_URL, "/set-summary", { id: myId, summary });
+        await brokerFetch(
+          BROKER_URL,
+          "/set-summary",
+          withAuth({ id: myId, summary })
+        );
         return {
           content: [
             {
@@ -420,36 +559,29 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       try {
-        const result = await brokerFetch<PollMessagesResponse>(BROKER_URL, "/poll-messages", {
-          id: myId,
-        });
+        await syncInbox(false);
 
-        if (result.messages.length === 0) {
+        const messages = bufferedInbox;
+        bufferedInbox = [];
+
+        if (messages.length === 0) {
           return {
             content: [{ type: "text" as const, text: "No new messages." }],
           };
         }
 
-        const agents = await listAgentsCompatible(BROKER_URL, {
-          scope: "machine",
-          cwd: myCwd,
-          git_root: myGitRoot,
-        });
-        const byId = new Map(agents.map((agent) => [agent.id, agent]));
-
-        const lines = result.messages.map((message) => {
-          const sender = byId.get(message.from_id);
-          const label = sender
-            ? `${sender.name} (${sender.kind}, ${message.from_id})`
-            : message.from_id;
-          return `From ${label} at ${message.sent_at}:\n${message.text}`;
-        });
+        await acknowledgeMessagesCompatible(BROKER_URL, withAuth({
+          id: myId,
+          message_ids: messages.map((entry) => entry.message.id),
+        }));
 
         return {
           content: [
             {
               type: "text" as const,
-              text: `${result.messages.length} new message(s):\n\n${lines.join(
+              text: `${messages.length} new message(s):\n\n${messages
+                .map(formatBufferedMessage)
+                .join(
                 "\n\n---\n\n"
               )}`,
             },
@@ -473,49 +605,94 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+async function syncInbox(notifyClient: boolean) {
+  if (!myId) {
+    return;
+  }
+
+  if (inboxSyncPromise) {
+    await inboxSyncPromise;
+    return;
+  }
+
+  inboxSyncPromise = (async () => {
+    const result = await brokerFetch<PollMessagesResponse>(
+      BROKER_URL,
+      "/poll-messages",
+      withAuth({
+        id: myId!,
+      })
+    );
+
+    if (result.messages.length === 0) {
+      return;
+    }
+
+    const byId = await listAgentsById();
+    const arrivals = result.messages.map((message) => ({
+      message,
+      sender: byId.get(message.from_id) ?? null,
+    }));
+
+    bufferedInbox.push(...arrivals);
+
+    if (!notifyClient) {
+      return;
+    }
+
+    for (const entry of arrivals) {
+      await mcp.notification({
+        method: "notifications/claude/channel",
+        params: {
+          content: entry.message.text,
+          meta: {
+            message_id: String(entry.message.id),
+            from_id: entry.message.from_id,
+            from_name: entry.sender?.name ?? "",
+            from_kind: entry.sender?.kind ?? "",
+            from_summary: entry.sender?.summary ?? "",
+            from_cwd: entry.sender?.cwd ?? "",
+            sent_at: entry.message.sent_at,
+            delivered_at: entry.message.delivered_at ?? "",
+            conversation_id: entry.message.conversation_id,
+            reply_to_message_id:
+              entry.message.reply_to_message_id !== null
+                ? String(entry.message.reply_to_message_id)
+                : "",
+          },
+        },
+      });
+
+      log(
+        `Pushed message from ${entry.sender?.name ?? entry.message.from_id}: ${entry.message.text.slice(0, 80)}`
+      );
+    }
+
+    await markMessagesSurfacedCompatible(
+      BROKER_URL,
+      withAuth({
+        id: myId!,
+        message_ids: arrivals.map((entry) => entry.message.id),
+      })
+    );
+  })()
+    .catch((error) => {
+      log(`Poll error: ${error instanceof Error ? error.message : String(error)}`);
+    })
+    .finally(() => {
+      inboxSyncPromise = null;
+    });
+
+  await inboxSyncPromise;
+}
+
 async function pollAndPushMessages() {
   if (!myId) {
     return;
   }
 
   try {
-    const result = await brokerFetch<PollMessagesResponse>(BROKER_URL, "/poll-messages", {
-      id: myId,
-    });
-
-    if (result.messages.length === 0) {
-      return;
-    }
-
-    const agents = await listAgentsCompatible(BROKER_URL, {
-      scope: "machine",
-      cwd: myCwd,
-      git_root: myGitRoot,
-    });
-    const byId = new Map(agents.map((agent) => [agent.id, agent]));
-
-    for (const message of result.messages) {
-      const sender = byId.get(message.from_id);
-
-      await mcp.notification({
-        method: "notifications/claude/channel",
-        params: {
-          content: message.text,
-          meta: {
-            from_id: message.from_id,
-            from_name: sender?.name ?? "",
-            from_kind: sender?.kind ?? "",
-            from_summary: sender?.summary ?? "",
-            from_cwd: sender?.cwd ?? "",
-            sent_at: message.sent_at,
-          },
-        },
-      });
-
-      log(
-        `Pushed message from ${sender?.name ?? message.from_id}: ${message.text.slice(0, 80)}`
-      );
-    }
+    await syncInbox(true);
   } catch (error) {
     log(`Poll error: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -555,7 +732,10 @@ async function main() {
     }
   })();
 
-  await Promise.race([summaryPromise, new Promise((resolve) => setTimeout(resolve, 3000))]);
+  await Promise.race([
+    summaryPromise,
+    new Promise((resolve) => setTimeout(resolve, 3000)),
+  ]);
 
   const registration = await registerAgentCompatible(BROKER_URL, {
     pid: process.pid,
@@ -571,15 +751,24 @@ async function main() {
       "directory_scope",
       "repo_scope",
       "summary",
+      "message_receipts",
+      "unread_counts",
       "channel_notifications",
     ],
-    metadata: {
+    metadata: buildAgentMetadata({
       client: "Claude Code",
       adapter: "claudy-talky",
-    },
+      adapterVersion: "0.4.0",
+      notificationStyles: ["claude-channel", "manual-check"],
+      workspaceSource: "process-cwd",
+      extra: {
+        client: "Claude Code",
+      },
+    }),
   });
 
   myId = registration.id;
+  myAuthToken = registration.auth_token ?? null;
   log(`Registered as agent ${myId}`);
 
   if (!initialSummary) {
@@ -589,7 +778,14 @@ async function main() {
       }
 
       try {
-        await brokerFetch(BROKER_URL, "/set-summary", { id: myId, summary: initialSummary });
+        await brokerFetch(
+          BROKER_URL,
+          "/set-summary",
+          withAuth({
+            id: myId,
+            summary: initialSummary,
+          })
+        );
         log(`Late auto-summary applied: ${initialSummary}`);
       } catch {
         // Best effort.
@@ -607,7 +803,7 @@ async function main() {
     }
 
     try {
-      await brokerFetch(BROKER_URL, "/heartbeat", { id: myId });
+      await brokerFetch(BROKER_URL, "/heartbeat", withAuth({ id: myId }));
     } catch {
       // Best effort.
     }
@@ -619,7 +815,7 @@ async function main() {
 
     if (myId) {
       try {
-        await brokerFetch(BROKER_URL, "/unregister", { id: myId });
+        await brokerFetch(BROKER_URL, "/unregister", withAuth({ id: myId }));
         log("Unregistered from broker");
       } catch {
         // Best effort.

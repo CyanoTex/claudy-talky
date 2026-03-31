@@ -6,23 +6,33 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { buildAgentMetadata } from "./agent-metadata.ts";
+import { formatAgent } from "./agent-format.ts";
+import {
+  acknowledgeMessagesCompatible,
+  brokerFetch,
+  listAgentsCompatible,
+  markMessagesSurfacedCompatible,
+  messageHistoryCompatible,
+  registerAgentCompatible,
+} from "./broker-compat.ts";
 import { getBrokerPort } from "./config.ts";
-import type {
-  Agent,
-  AgentId,
-  PollMessagesResponse,
-  RegisterAgentResponse,
-} from "./types.ts";
+import {
+  desktopNotificationsEnabled,
+  sendDesktopNotification,
+} from "./desktop-notify.ts";
 import {
   generateSummary,
   getGitBranch,
   getRecentFiles,
 } from "./summarize.ts";
-import {
-  brokerFetch,
-  listAgentsCompatible,
-  registerAgentCompatible,
-} from "./broker-compat.ts";
+import type {
+  Agent,
+  AgentId,
+  Message,
+  PollMessagesResponse,
+  SendMessageResponse,
+} from "./types.ts";
 import { resolveWorkspaceCwdFromRootUris } from "./workspace.ts";
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
@@ -45,7 +55,7 @@ const LIST_AGENTS_SCHEMA = {
     capability: {
       type: "string" as const,
       description:
-        'Optional agent capability filter, such as "messaging", "manual_message_polling", or "channel_notifications".',
+        'Optional agent capability filter, such as "messaging", "manual_message_polling", "message_receipts", or "channel_notifications".',
     },
   },
   required: ["scope"],
@@ -60,6 +70,10 @@ export type PollingAdapterOptions = {
   instructions: string;
   agentTransport?: string;
   capabilities?: string[];
+  clientVersion?: string | null;
+  launcher?: string;
+  notificationStyles?: string[];
+  enableDesktopNotifications?: boolean;
   metadata?: Record<string, unknown>;
 };
 
@@ -85,7 +99,10 @@ function createLogger(prefix: string) {
   };
 }
 
-async function ensureBroker(brokerUrl: string, log: (message: string) => void): Promise<void> {
+async function ensureBroker(
+  brokerUrl: string,
+  log: (message: string) => void
+): Promise<void> {
   if (await isBrokerAlive(brokerUrl)) {
     log("Broker already running");
     return;
@@ -149,32 +166,24 @@ function defaultAgentName(label: string, cwd: string): string {
   return leaf ? `${label} @ ${leaf}` : label;
 }
 
-function formatAgent(agent: Agent): string {
-  const parts = [
-    `ID: ${agent.id}`,
-    `Name: ${agent.name}`,
-    `Kind: ${agent.kind}`,
-    `Transport: ${agent.transport}`,
-  ];
+function appendMessageStateLines(lines: string[], message: Message) {
+  lines.push(`Conversation: ${message.conversation_id}`);
 
-  if (agent.cwd) {
-    parts.push(`CWD: ${agent.cwd}`);
-  }
-  if (agent.git_root) {
-    parts.push(`Repo: ${agent.git_root}`);
-  }
-  if (agent.capabilities.length > 0) {
-    parts.push(`Capabilities: ${agent.capabilities.join(", ")}`);
-  }
-  if (agent.summary) {
-    parts.push(`Summary: ${agent.summary}`);
-  }
-  if (agent.tty) {
-    parts.push(`TTY: ${agent.tty}`);
+  if (message.reply_to_message_id !== null) {
+    lines.push(`Reply to message #${message.reply_to_message_id}`);
   }
 
-  parts.push(`Last seen: ${agent.last_seen}`);
-  return parts.join("\n  ");
+  if (message.delivered_at) {
+    lines.push(`Delivered to inbox at ${message.delivered_at}`);
+  }
+
+  if (message.surfaced_at) {
+    lines.push(`Surfaced to client at ${message.surfaced_at}`);
+  }
+
+  if (message.seen_at) {
+    lines.push(`Marked seen at ${message.seen_at}`);
+  }
 }
 
 function formatBufferedMessage(entry: BufferedInboxMessage): string {
@@ -182,7 +191,10 @@ function formatBufferedMessage(entry: BufferedInboxMessage): string {
   const label = sender
     ? `${sender.name} (${sender.kind}, ${message.from_id})`
     : message.from_id;
-  return `From ${label} at ${message.sent_at}:\n${message.text}`;
+  const details = [`Message #${message.id} from ${label} at ${message.sent_at}:`, message.text];
+  appendMessageStateLines(details, message);
+
+  return details.join("\n");
 }
 
 function formatInboxNotification(entry: BufferedInboxMessage): string {
@@ -192,6 +204,13 @@ function formatInboxNotification(entry: BufferedInboxMessage): string {
     : `New claudy-talky message from ${message.from_id}`;
   const details: string[] = [header, "", message.text];
 
+  details.push("", `Message ID: ${message.id}`);
+  details.push("", `Conversation: ${message.conversation_id}`);
+
+  if (message.reply_to_message_id !== null) {
+    details.push(`Reply to message #${message.reply_to_message_id}`);
+  }
+
   if (sender?.summary) {
     details.push("", `Sender summary: ${sender.summary}`);
   }
@@ -200,7 +219,29 @@ function formatInboxNotification(entry: BufferedInboxMessage): string {
     details.push(`Sender cwd: ${sender.cwd}`);
   }
 
-  details.push('Use `check_messages` if you want to review the unread inbox again.');
+  if (message.delivered_at) {
+    details.push(`Delivered to your inbox at: ${message.delivered_at}`);
+  }
+
+  details.push(
+    'Use `check_messages` to mark unread notes as seen, or `message_history` to revisit the thread later.'
+  );
+  return details.join("\n");
+}
+
+function formatHistoryMessage(
+  message: Message,
+  agentsById: Map<AgentId, Agent>,
+  myId: AgentId
+): string {
+  const otherId = message.from_id === myId ? message.to_id : message.from_id;
+  const otherAgent = agentsById.get(otherId);
+  const direction =
+    message.from_id === myId
+      ? `You -> ${otherAgent?.name ?? otherId}`
+      : `${otherAgent?.name ?? message.from_id} -> you`;
+  const details = [`Message #${message.id} ${direction} at ${message.sent_at}:`, message.text];
+  appendMessageStateLines(details, message);
   return details.join("\n");
 }
 
@@ -234,22 +275,33 @@ async function resolveWorkspaceCwd(
   }
 }
 
-export async function runPollingAdapter(options: PollingAdapterOptions): Promise<void> {
+export async function runPollingAdapter(
+  options: PollingAdapterOptions
+): Promise<void> {
   const brokerUrl = `http://127.0.0.1:${getBrokerPort()}`;
   const log = createLogger(options.logPrefix);
 
   let myId: AgentId | null = null;
+  let myAuthToken: string | null = null;
   let myCwd = process.cwd();
   let myGitRoot: string | null = null;
+  let workspaceSource: "process-cwd" | "mcp-roots" = "process-cwd";
   let bufferedInbox: BufferedInboxMessage[] = [];
   let inboxSyncPromise: Promise<void> | null = null;
+  let desktopNotificationWarningLogged = false;
+
+  const desktopNotifications =
+    options.enableDesktopNotifications ?? desktopNotificationsEnabled();
 
   const capabilities = [
     "messaging",
     "directory_scope",
     "repo_scope",
     "summary",
+    "message_receipts",
+    "unread_counts",
     "manual_message_polling",
+    ...(desktopNotifications ? ["desktop_notifications"] : []),
     ...(options.capabilities ?? []),
   ];
 
@@ -257,7 +309,7 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
     {
       name: "list_agents",
       description:
-        "List other connected agents. Returns their ID, name, kind, transport, working directory, repo, and summary.",
+        "List other connected agents. Returns their ID, name, kind, transport, working directory, repo, inbox counts, and summary.",
       inputSchema: LIST_AGENTS_SCHEMA,
     },
     {
@@ -281,8 +333,40 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
             type: "string" as const,
             description: "The message to send",
           },
+          conversation_id: {
+            type: "string" as const,
+            description:
+              "Optional conversation ID to continue an existing thread without replying to a specific message.",
+          },
+          reply_to_message_id: {
+            type: "number" as const,
+            description:
+              "Optional message ID to reply to. This keeps the reply inside the original conversation automatically.",
+          },
         },
         required: ["to_id", "message"],
+      },
+    },
+    {
+      name: "message_history",
+      description:
+        "Show recent messages from your inbox history. Filter by agent ID or conversation ID to revisit a thread.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          with_agent_id: {
+            type: "string" as const,
+            description: "Optional other agent ID to limit history to one participant.",
+          },
+          conversation_id: {
+            type: "string" as const,
+            description: "Optional conversation ID to limit history to one thread.",
+          },
+          limit: {
+            type: "number" as const,
+            description: "Maximum number of messages to return. Defaults to 20.",
+          },
+        },
       },
     },
     {
@@ -303,7 +387,7 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
     {
       name: "check_messages",
       description:
-        "Check unread messages from other agents. This adapter also polls in the background and may surface standard MCP log notifications when the client supports them.",
+        "Check unread messages from other agents. This adapter also polls in the background and may surface standard MCP log notifications or desktop notifications when available.",
       inputSchema: {
         type: "object" as const,
         properties: {},
@@ -331,6 +415,10 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
     return new Map(agents.map((agent) => [agent.id, agent]));
   }
 
+  function withAuth<T extends object>(body: T): T & { auth_token?: string } {
+    return myAuthToken ? { ...body, auth_token: myAuthToken } : body;
+  }
+
   async function syncInbox(notifyClient: boolean): Promise<void> {
     if (!myId) {
       return;
@@ -342,9 +430,13 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
     }
 
     inboxSyncPromise = (async () => {
-      const result = await brokerFetch<PollMessagesResponse>(brokerUrl, "/poll-messages", {
-        id: myId!,
-      });
+      const result = await brokerFetch<PollMessagesResponse>(
+        brokerUrl,
+        "/poll-messages",
+        withAuth({
+          id: myId!,
+        })
+      );
 
       if (result.messages.length === 0) {
         return;
@@ -369,13 +461,37 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
           data: formatInboxNotification(entry),
         });
 
+        if (desktopNotifications) {
+          const notified = await sendDesktopNotification({
+            title: entry.sender
+              ? `claudy-talky: ${entry.sender.name}`
+              : `claudy-talky: ${entry.message.from_id}`,
+            body: entry.message.text,
+          });
+
+          if (!notified && !desktopNotificationWarningLogged) {
+            log("Desktop notification fallback was unavailable");
+            desktopNotificationWarningLogged = true;
+          }
+        }
+
         log(
           `Notified inbound message from ${entry.sender?.name ?? entry.message.from_id}: ${entry.message.text.slice(0, 80)}`
         );
       }
+
+      await markMessagesSurfacedCompatible(
+        brokerUrl,
+        withAuth({
+          id: myId!,
+          message_ids: arrivals.map((entry) => entry.message.id),
+        })
+      );
     })()
       .catch((error) => {
-        log(`Inbox sync error: ${error instanceof Error ? error.message : String(error)}`);
+        log(
+          `Inbox sync error: ${error instanceof Error ? error.message : String(error)}`
+        );
       })
       .finally(() => {
         inboxSyncPromise = null;
@@ -447,7 +563,12 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
       }
 
       case "send_message": {
-        const { to_id, message } = args as { to_id: string; message: string };
+        const { to_id, message, conversation_id, reply_to_message_id } = args as {
+          to_id: string;
+          message: string;
+          conversation_id?: string;
+          reply_to_message_id?: number;
+        };
         if (!myId) {
           return {
             content: [{ type: "text" as const, text: "Not registered with broker yet" }],
@@ -456,14 +577,16 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
         }
 
         try {
-          const result = await brokerFetch<{ ok: boolean; error?: string }>(
+          const result = await brokerFetch<SendMessageResponse>(
             brokerUrl,
             "/send-message",
-            {
+            withAuth({
               from_id: myId,
               to_id,
               text: message,
-            }
+              conversation_id,
+              reply_to_message_id,
+            })
           );
 
           if (!result.ok) {
@@ -482,7 +605,7 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
             content: [
               {
                 type: "text" as const,
-                text: `Message sent to agent ${to_id}`,
+                text: `Message sent to agent ${to_id}${result.message ? ` (message #${result.message.id}, conversation ${result.message.conversation_id}${result.message.reply_to_message_id !== null ? `, reply to #${result.message.reply_to_message_id}` : ""})` : ""}`,
               },
             ],
           };
@@ -492,6 +615,61 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
               {
                 type: "text" as const,
                 text: `Error sending message: ${error instanceof Error ? error.message : String(error)}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+
+      case "message_history": {
+        if (!myId) {
+          return {
+            content: [{ type: "text" as const, text: "Not registered with broker yet" }],
+            isError: true,
+          };
+        }
+
+        try {
+          const { with_agent_id, conversation_id, limit } = args as {
+            with_agent_id?: string;
+            conversation_id?: string;
+            limit?: number;
+          };
+
+          const result = await messageHistoryCompatible(
+            brokerUrl,
+            withAuth({
+              agent_id: myId,
+              with_agent_id,
+              conversation_id,
+              limit,
+            })
+          );
+
+          if (result.messages.length === 0) {
+            return {
+              content: [{ type: "text" as const, text: "No matching messages found." }],
+            };
+          }
+
+          const agentsById = await listAgentsById();
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `${result.messages.length} message(s):\n\n${result.messages
+                  .map((message) => formatHistoryMessage(message, agentsById, myId!))
+                  .join("\n\n---\n\n")}`,
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error loading history: ${error instanceof Error ? error.message : String(error)}`,
               },
             ],
             isError: true,
@@ -509,7 +687,11 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
         }
 
         try {
-          await brokerFetch(brokerUrl, "/set-summary", { id: myId, summary });
+          await brokerFetch(
+            brokerUrl,
+            "/set-summary",
+            withAuth({ id: myId, summary })
+          );
           return {
             content: [
               {
@@ -551,15 +733,18 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
             };
           }
 
+          await acknowledgeMessagesCompatible(brokerUrl, withAuth({
+            id: myId,
+            message_ids: messages.map((entry) => entry.message.id),
+          }));
+
           return {
             content: [
               {
                 type: "text" as const,
                 text: `${messages.length} new message(s):\n\n${messages
                   .map(formatBufferedMessage)
-                  .join(
-                  "\n\n---\n\n"
-                )}`,
+                  .join("\n\n---\n\n")}`,
               },
             ],
           };
@@ -589,6 +774,7 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
   log("MCP connected");
 
   myCwd = await resolveWorkspaceCwd(mcp, process.cwd(), log);
+  workspaceSource = myCwd === process.cwd() ? "process-cwd" : "mcp-roots";
   myGitRoot = await getGitRoot(myCwd);
 
   log(`CWD: ${myCwd}`);
@@ -618,7 +804,10 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
     }
   })();
 
-  await Promise.race([summaryPromise, new Promise((resolve) => setTimeout(resolve, 3000))]);
+  await Promise.race([
+    summaryPromise,
+    new Promise((resolve) => setTimeout(resolve, 3000)),
+  ]);
 
   const registration = await registerAgentCompatible(brokerUrl, {
     pid: process.pid,
@@ -630,10 +819,28 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
     tty,
     summary: initialSummary,
     capabilities,
-    metadata: options.metadata ?? {},
+    metadata: buildAgentMetadata({
+      client:
+        typeof options.metadata?.client === "string"
+          ? options.metadata.client
+          : options.agentLabel,
+      adapter: "claudy-talky",
+      adapterVersion: options.serverVersion,
+      clientVersion: options.clientVersion,
+      launcher: options.launcher,
+      notificationStyles: [
+        "manual-check",
+        "mcp-logging",
+        ...(desktopNotifications ? ["desktop-toast"] : []),
+        ...(options.notificationStyles ?? []),
+      ],
+      workspaceSource,
+      extra: options.metadata,
+    }),
   });
 
   myId = registration.id;
+  myAuthToken = registration.auth_token ?? null;
   log(`Registered as agent ${myId}`);
 
   if (!initialSummary) {
@@ -643,7 +850,14 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
       }
 
       try {
-        await brokerFetch(brokerUrl, "/set-summary", { id: myId, summary: initialSummary });
+        await brokerFetch(
+          brokerUrl,
+          "/set-summary",
+          withAuth({
+            id: myId,
+            summary: initialSummary,
+          })
+        );
         log(`Late auto-summary applied: ${initialSummary}`);
       } catch {
         // Best effort.
@@ -661,7 +875,7 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
     }
 
     try {
-      await brokerFetch(brokerUrl, "/heartbeat", { id: myId });
+      await brokerFetch(brokerUrl, "/heartbeat", withAuth({ id: myId }));
     } catch {
       // Best effort.
     }
@@ -673,7 +887,7 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
 
     if (myId) {
       try {
-        await brokerFetch(brokerUrl, "/unregister", { id: myId });
+        await brokerFetch(brokerUrl, "/unregister", withAuth({ id: myId }));
         log("Unregistered from broker");
       } catch {
         // Best effort.

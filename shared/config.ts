@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const DEFAULT_PORT = 7899;
@@ -47,6 +47,22 @@ export function getBrokerPort(): number {
 
 export function getDbPath(): string {
   return firstEnv("CLAUDY_TALKY_DB", "CLAUDE_PEERS_DB") ?? getDefaultDbPath();
+}
+
+export function getDbFallbackPaths(cwd = process.cwd()): string[] {
+  const candidates = [
+    getDbPath(),
+    join(cwd, ".claudy-talky.db"),
+    join(tmpdir(), "claudy-talky", `claudy-talky-${getBrokerPort()}.db`),
+  ];
+
+  return Array.from(
+    new Set(candidates.filter((value) => value && value.trim().length > 0))
+  );
+}
+
+export function getBrokerLockPath(port = getBrokerPort()): string {
+  return join(tmpdir(), "claudy-talky", `broker-${port}.lock`);
 }
 
 export function getStaleAgentMs(): number {
