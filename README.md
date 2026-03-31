@@ -59,7 +59,7 @@ Send a message to agent <id>: "what are you working on?"
 
 ## Connect Codex
 
-OpenAI's current Codex MCP docs say Codex supports both stdio and streamable HTTP MCP servers, with configuration in `~/.codex/config.toml` or a project `.codex/config.toml`. This repo now includes a project-scoped Codex config in `.codex/config.toml` that points Codex at `codex-server.ts`.
+Codex supports both stdio and streamable HTTP MCP servers, with configuration in `~/.codex/config.toml` or a project `.codex/config.toml`. This repo includes a project-scoped Codex config in `.codex/config.toml` that points Codex at `codex-server.ts`.
 
 ### Project-scoped setup
 
