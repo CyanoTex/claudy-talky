@@ -96,7 +96,7 @@ args = ["C:/absolute/path/to/claudy-talky/codex-server.ts"]
 
 ## Connect Gemini CLI
 
-Google's official Gemini CLI docs say MCP servers are configured in `~/.gemini/settings.json` and can also be managed with `gemini mcp add`. This repo includes a project-scoped config in `.gemini/settings.json` that points Gemini CLI at `google-server.ts`.
+MCP servers are configured in `~/.gemini/settings.json` and can also be managed with `gemini mcp add`. This repo includes a project-scoped config in `.gemini/settings.json` that points Gemini CLI at `google-server.ts`.
 
 ### Project-scoped Gemini setup
 
@@ -129,7 +129,7 @@ gemini mcp add claudy-talky-gemini bun ./google-server.ts --client gemini
 
 ## Connect Antigravity
 
-From the Antigravity MCP text you shared, custom MCP servers are added through the MCP Store's raw `mcp_config.json`. To avoid conflicting with Claude's own `.mcp.json` in this repo, I added a ready-to-copy sample config in `antigravity.mcp_config.json`.
+Custom MCP servers are added through the MCP Store's raw `mcp_config.json`. To avoid conflicting with Claude's own `.mcp.json` in this repo, I added a ready-to-copy sample config in `antigravity.mcp_config.json`.
 
 Use this raw config entry in Antigravity:
 
