@@ -8,7 +8,7 @@ await runPollingAdapter({
   logPrefix: "[claudy-talky-codex]",
   agentKind: "openai-codex",
   agentLabel: "Codex",
-  instructions: `You are connected to the claudy-talky network as a Codex agent. Other local agents, including Claude Code sessions, can discover you and exchange messages with you.
+  instructions: `You are connected to the claudy-talky network as a Codex agent. This adapter is intended for both Codex CLI and the Codex app. Other local agents, including Claude Code sessions, can discover you and exchange messages with you.
 
 This integration uses background inbox polling. If Codex surfaces standard MCP log notifications, new messages may appear automatically. Use check_messages as the fallback inbox and to revisit unread messages.
 

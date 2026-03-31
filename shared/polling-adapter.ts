@@ -23,6 +23,7 @@ import {
   listAgentsCompatible,
   registerAgentCompatible,
 } from "./broker-compat.ts";
+import { resolveWorkspaceCwdFromRootUris } from "./workspace.ts";
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const INBOX_POLL_INTERVAL_MS = 2_000;
@@ -201,6 +202,36 @@ function formatInboxNotification(entry: BufferedInboxMessage): string {
 
   details.push('Use `check_messages` if you want to review the unread inbox again.');
   return details.join("\n");
+}
+
+async function resolveWorkspaceCwd(
+  mcp: Server,
+  fallbackCwd: string,
+  log: (message: string) => void
+): Promise<string> {
+  const capabilities = mcp.getClientCapabilities();
+  if (!capabilities?.roots) {
+    return fallbackCwd;
+  }
+
+  try {
+    const result = await mcp.listRoots();
+    const resolved = resolveWorkspaceCwdFromRootUris(
+      fallbackCwd,
+      result.roots.map((root) => root.uri)
+    );
+
+    if (resolved !== fallbackCwd) {
+      log(`Adjusted CWD from ${fallbackCwd} to MCP root ${resolved}`);
+    }
+
+    return resolved;
+  } catch (error) {
+    log(
+      `Root discovery failed (non-critical): ${error instanceof Error ? error.message : String(error)}`
+    );
+    return fallbackCwd;
+  }
 }
 
 export async function runPollingAdapter(options: PollingAdapterOptions): Promise<void> {
@@ -552,9 +583,13 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
 
   await ensureBroker(brokerUrl, log);
 
-  myCwd = process.cwd();
-  myGitRoot = await getGitRoot(myCwd);
   const tty = getTty();
+
+  await mcp.connect(new StdioServerTransport());
+  log("MCP connected");
+
+  myCwd = await resolveWorkspaceCwd(mcp, process.cwd(), log);
+  myGitRoot = await getGitRoot(myCwd);
 
   log(`CWD: ${myCwd}`);
   log(`Git root: ${myGitRoot ?? "(none)"}`);
@@ -615,9 +650,6 @@ export async function runPollingAdapter(options: PollingAdapterOptions): Promise
       }
     });
   }
-
-  await mcp.connect(new StdioServerTransport());
-  log("MCP connected");
 
   const inboxTimer = setInterval(() => {
     void syncInbox(true);

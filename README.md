@@ -65,9 +65,9 @@ Then:
 Send a message to agent <id>: "what are you working on?"
 ```
 
-## Connect Codex
+## Connect Codex CLI and Codex App
 
-Codex supports both stdio and streamable HTTP MCP servers, with configuration in `~/.codex/config.toml` or a project `.codex/config.toml`. This repo includes a project-scoped Codex config in `.codex/config.toml` that points Codex at `codex-server.ts`.
+OpenAI's current Codex docs say the CLI and IDE extension share MCP server configuration in `~/.codex/config.toml`, and the CLI can also add servers directly with `codex mcp add`. This repo includes a project-scoped `.codex/config.toml` that points Codex at `codex-server.ts`.
 
 ### Project-scoped setup
 
@@ -77,16 +77,30 @@ If this repo is trusted in Codex, the checked-in config is enough:
 [mcp_servers."claudy-talky"]
 command = "bun"
 args = ["./codex-server.ts"]
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+enabled = true
+```
+
+### Codex CLI setup
+
+If you want to register it directly from the CLI instead, run:
+
+```bash
+codex mcp add claudy-talky -- bun /absolute/path/to/claudy-talky/codex-server.ts
 ```
 
 ### Global setup
 
-If you prefer a global Codex config instead, add the equivalent entry to `~/.codex/config.toml`:
+If you prefer editing `~/.codex/config.toml` by hand, add the equivalent entry:
 
 ```toml
 [mcp_servers."claudy-talky"]
 command = "bun"
 args = ["C:/absolute/path/to/claudy-talky/codex-server.ts"]
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+enabled = true
 ```
 
 ### How Codex participates
@@ -94,11 +108,12 @@ args = ["C:/absolute/path/to/claudy-talky/codex-server.ts"]
 - `codex-server.ts` registers Codex as an `openai-codex` agent on the same broker.
 - Codex gets `list_agents`, `send_message`, `set_summary`, and `check_messages`.
 - Unlike Claude Code, Codex does not use the Claude channel push path in this integration. Instead, `claudy-talky` polls in the background and emits standard MCP log notifications when the client supports them, with `check_messages` kept as the fallback inbox.
+- `claudy-talky` now also asks MCP-capable Codex clients for workspace roots after connect, so Codex CLI sessions can register the actual project path instead of a generic launcher cwd such as `C:\Windows\System32`.
 
 ### Practical workflow
 
 1. Start Claude with `server.ts`.
-2. Open Codex in this repo so it loads `.codex/config.toml`.
+2. Open Codex CLI or the Codex app in this repo so it loads `.codex/config.toml`, or add the server globally with `codex mcp add`.
 3. In Claude, ask for `list_agents` and message the `openai-codex` agent.
 4. In Codex, watch for `claudy-talky` inbox notifications when they appear, respond with `send_message`, and use `check_messages` whenever you want to review unread messages explicitly.
 
@@ -256,12 +271,13 @@ curl -X POST http://127.0.0.1:7899/unregister \
 - `broker.ts` runs a localhost-only HTTP broker backed by SQLite.
 - `server.ts` is the Claude adapter. It exposes MCP tools and turns inbound messages into Claude channel notifications.
 - `codex-server.ts` is the Codex adapter. It exposes the same broker tools without relying on Claude-specific channel push.
-- `google-server.ts` is the Gemini CLI and Antigravity adapter. It exposes the same broker tools with explicit inbox polling.
+- `google-server.ts` is the Gemini CLI and Antigravity adapter. It exposes the same broker tools with background inbox polling.
 - `cli.ts` is a local utility for inspecting agents and sending messages.
 - `examples/http-agent.ts` shows how a non-Claude agent can join the network.
 - `shared/types.ts` defines the common wire protocol.
 - `shared/config.ts` centralizes config with legacy env var fallbacks.
 - `shared/polling-adapter.ts` factors the shared logic for non-Claude polling-based clients.
+- `shared/workspace.ts` resolves MCP roots into a better working directory for clients like Codex CLI.
 - `.gemini/settings.json` is a project-scoped Gemini CLI MCP config.
 - `antigravity.mcp_config.json` is a copy-paste Antigravity raw MCP config example.
 
