@@ -1,3 +1,8 @@
+# AI Coding Disclosure Notice
+
+Codex - GPT 5.4 Extra High
+Improved claude-peers
+
 # claudy-talky
 
 > *Brrring brrring!*
