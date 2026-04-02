@@ -1,7 +1,8 @@
 # AI Coding Disclosure Notice
 
-Codex - GPT 5.4 Extra High
-Improved claude-peers
+Codex - GPT 5.4 Extra High (cloned claude-peers)
+
+Antigravity - Gemini (whichever one is available with my limits - 3 Flash or 3.1 Pro) (Inspection and back-and-forth with Codex)
 
 # claudy-talky
 
