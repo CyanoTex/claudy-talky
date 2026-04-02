@@ -511,10 +511,22 @@ function formatThreadTimestamp(sentAt: string): string {
   return date.toISOString().slice(0, 19).replace("T", " ");
 }
 
+function minimalSpeakerLabel(message: Message): string {
+  if (message.from_id === myId) {
+    return "Me";
+  }
+
+  if (currentContext.kind === "dm") {
+    return participantName(currentContext.agentId);
+  }
+
+  return participantName(message.from_id);
+}
+
 function formatMessageForThread(message: Message): string {
   if (threadDetailMode === "minimal") {
     return [
-      `[${formatThreadTimestamp(message.sent_at)}]`,
+      `[${formatThreadTimestamp(message.sent_at)}] ${minimalSpeakerLabel(message)}`,
       ...message.text.split(/\r?\n/),
     ].join("\n");
   }
