@@ -178,5 +178,12 @@ return `Slash commands:
 
 Plain text sends to the current DM or room.
 
+Keyboard:
+Tab / Shift+Tab cycle panes
+Left / Right move across the Actions strip
+Enter runs the selected Action or sends the composer text
+Esc clears the composer and leaves edit mode
+x jumps to the Actions strip
+
 Use refs from /agents, for example: /dm codex, /dm claude:claudy-talky Ping, /msg "Codex @ claudy-talky" "Need a quick status?"`;
 }

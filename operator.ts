@@ -44,7 +44,7 @@ type OperatorContext =
   | { kind: "dm"; agentId: string }
   | { kind: "room"; conversationId: string };
 
-type FocusPane = "agents" | "rooms" | "thread" | "composer";
+type FocusPane = "actions" | "agents" | "rooms" | "thread" | "composer";
 type NoticeLevel = "info" | "warn" | "error";
 
 const BROKER_URL = `http://127.0.0.1:${getBrokerPort()}`;
@@ -72,6 +72,9 @@ let shuttingDown = false;
 let pollInFlight = false;
 let helpModalOpen = false;
 let modalReturnFocus: { focus: () => void } | null = null;
+let composerEditing = false;
+let composerValue = "";
+let swallowNextComposerKeypress = false;
 
 const screen = blessed.screen({
   smartCSR: true,
@@ -132,6 +135,38 @@ const actionHint = blessed.box({
   tags: true,
   style: {
     fg: "white",
+  },
+});
+
+const actionTabs = blessed.listbar({
+  parent: actionBar,
+  top: 0,
+  left: 1,
+  width: "100%-2",
+  height: 1,
+  mouse: true,
+  keys: true,
+  vi: false,
+  autoCommandKeys: false,
+  style: {
+    bg: "white",
+    item: {
+      fg: "black",
+      bg: "white",
+      hover: {
+        fg: "white",
+        bg: "blue",
+      },
+    },
+    selected: {
+      fg: "white",
+      bg: "blue",
+      bold: true,
+    },
+    prefix: {
+      fg: "black",
+      bg: "white",
+    },
   },
 });
 
@@ -275,7 +310,7 @@ const threadBox = blessed.scrollablebox({
   },
 });
 
-const composer = blessed.textbox({
+const composer = blessed.box({
   parent: screen,
   bottom: 0,
   left: 0,
@@ -283,9 +318,9 @@ const composer = blessed.textbox({
   height: 4,
   border: "line",
   label: " Composer ",
-  inputOnFocus: true,
   mouse: true,
   keys: true,
+  tags: false,
   style: {
     border: {
       fg: "green",
@@ -337,53 +372,30 @@ const modal = blessed.scrollablebox({
   },
 });
 
-function createActionButton(
-  left: number,
+function createActionCommand(
   content: string,
   handler: () => void | Promise<void>
 ) {
-  const button = blessed.button({
-    parent: actionBar,
-    top: 0,
-    left,
-    width: content.length + 4,
-    height: 1,
-    mouse: true,
-    shrink: true,
-    padding: {
-      left: 1,
-      right: 1,
+  return {
+    text: content,
+    prefix: "",
+    callback: () => {
+      void Promise.resolve(handler()).catch((error) => {
+        showError(error instanceof Error ? error.message : String(error));
+      });
     },
-    content,
-    style: {
-      fg: "black",
-      bg: "white",
-      focus: {
-        fg: "white",
-        bg: "blue",
-      },
-      hover: {
-        fg: "white",
-        bg: "blue",
-      },
-    },
-  });
-
-  button.on("press", () => {
-    void Promise.resolve(handler()).catch((error) => {
-      showError(error instanceof Error ? error.message : String(error));
-    });
-  });
-
-  return button;
+  };
 }
 
-const dmButton = createActionButton(1, "DM selected", () => openSelectedAgent());
-const roomButton = createActionButton(16, "Open room", () => openSelectedRoom());
-const replyButton = createActionButton(28, "Reply", () => switchReplyContext());
-const leaveButton = createActionButton(37, "Leave", () => leaveContext());
-const refreshButton = createActionButton(46, "Refresh", () => fullRefresh());
-const helpButton = createActionButton(56, "Help", () => showHelp());
+actionTabs.setItems([
+  createActionCommand("DM selected", () => openSelectedAgent()),
+  createActionCommand("Open room", () => openSelectedRoom()),
+  createActionCommand("Reply", () => switchReplyContext()),
+  createActionCommand("Leave", () => leaveContext()),
+  createActionCommand("Refresh", () => fullRefresh()),
+  createActionCommand("Help", () => showHelp()),
+]);
+actionTabs.select(0);
 
 function nowText(): string {
   return new Date().toISOString();
@@ -534,6 +546,8 @@ function showError(message: string): void {
 
 function focusElementForPane(pane: FocusPane): { focus: () => void } {
   switch (pane) {
+    case "actions":
+      return actionTabs;
     case "agents":
       return agentsList;
     case "rooms":
@@ -547,15 +561,29 @@ function focusElementForPane(pane: FocusPane): { focus: () => void } {
 
 function focusPane(pane: FocusPane): void {
   activePane = pane;
+  composerEditing = pane === "composer";
   focusElementForPane(pane).focus();
   renderAll();
 }
 
+function isComposerFocused(): boolean {
+  return activePane === "composer" || screen.focused === composer;
+}
+
 function cycleFocus(direction: 1 | -1): void {
-  const panes: FocusPane[] = ["agents", "rooms", "thread", "composer"];
+  const panes: FocusPane[] = ["actions", "agents", "rooms", "thread", "composer"];
   const currentIndex = panes.indexOf(activePane);
   const nextIndex = (currentIndex + direction + panes.length) % panes.length;
   focusPane(panes[nextIndex]!);
+}
+
+function renderPaneChrome(): void {
+  actionBar.style.border.fg = activePane === "actions" ? "yellow" : "blue";
+  agentsList.style.border.fg = activePane === "agents" ? "yellow" : "blue";
+  roomsList.style.border.fg = activePane === "rooms" ? "yellow" : "blue";
+  threadHeader.style.border.fg = activePane === "thread" ? "yellow" : "blue";
+  threadBox.style.border.fg = activePane === "thread" ? "yellow" : "blue";
+  composer.style.border.fg = activePane === "composer" ? "yellow" : "green";
 }
 
 function closeModal(): void {
@@ -589,7 +617,7 @@ function renderTitleBar(): void {
   noticeBar.style.fg = lastNoticeLevel === "warn" ? "black" : "white";
   noticeBar.setContent(` ${lastNotice}`);
   actionHint.setContent(
-    "Click an agent to DM, click a room to open it, type slash commands in the composer, and use Tab to cycle panes."
+    "Tab cycles panes. Use Left/Right + Enter on Actions. Type directly in the composer."
   );
 }
 
@@ -690,10 +718,24 @@ function renderThread(): void {
 }
 
 function renderComposer(): void {
-  composer.setLabel(` Composer | ${contextLabel()} `);
+  const prompt = "> ";
+  const cursor = isComposerFocused() ? "█" : "";
+  const rawValue = `${composerValue}${cursor}`;
+  const innerWidth =
+    typeof composer.width === "number" && typeof composer.ileft === "number" && typeof composer.iright === "number"
+      ? Math.max(8, composer.width - composer.ileft - composer.iright - prompt.length - 1)
+      : 80;
+  const visibleValue =
+    rawValue.length > innerWidth ? rawValue.slice(rawValue.length - innerWidth) : rawValue;
+
+  composer.setLabel(
+    ` Composer | ${contextLabel()}${composerEditing ? " | editing" : ""} `
+  );
+  composer.setContent(`${prompt}${visibleValue}`);
 }
 
 function renderAll(): void {
+  renderPaneChrome();
   renderTitleBar();
   renderAgents();
   renderRooms();
@@ -1258,7 +1300,7 @@ async function runCommand(command: OperatorCommand): Promise<void> {
 
 async function handleComposerSubmit(rawValue: string): Promise<void> {
   const value = rawValue.trim();
-  composer.clearValue();
+  composerValue = "";
 
   if (!value) {
     setNotice("Composer cleared.", "warn");
@@ -1294,20 +1336,29 @@ async function shutdown(code: number): Promise<never> {
 }
 
 function wireFocusTracking(): void {
+  actionTabs.on("focus", () => {
+    activePane = "actions";
+    composerEditing = false;
+    renderAll();
+  });
   agentsList.on("focus", () => {
     activePane = "agents";
+    composerEditing = false;
     renderAll();
   });
   roomsList.on("focus", () => {
     activePane = "rooms";
+    composerEditing = false;
     renderAll();
   });
   threadBox.on("focus", () => {
     activePane = "thread";
+    composerEditing = false;
     renderAll();
   });
   composer.on("focus", () => {
     activePane = "composer";
+    composerEditing = true;
     renderAll();
   });
 }
@@ -1334,11 +1385,12 @@ function wireKeyboardShortcuts(): void {
   });
 
   screen.key(["/"], () => {
-    if (helpModalOpen) {
+    if (helpModalOpen || isComposerFocused()) {
       return;
     }
 
-    composer.setValue("/");
+    composerValue = "/";
+    swallowNextComposerKeypress = true;
     focusPane("composer");
   });
 
@@ -1372,14 +1424,14 @@ function wireKeyboardShortcuts(): void {
   });
 
   screen.key(["a"], () => {
-    if (helpModalOpen || screen.focused === composer) {
+    if (helpModalOpen || isComposerFocused()) {
       return;
     }
     focusPane("agents");
   });
 
   screen.key(["r"], () => {
-    if (helpModalOpen || screen.focused === composer) {
+    if (helpModalOpen || isComposerFocused()) {
       return;
     }
     focusPane("rooms");
@@ -1392,20 +1444,73 @@ function wireKeyboardShortcuts(): void {
     focusPane("composer");
   });
 
+  screen.key(["x"], () => {
+    if (helpModalOpen || isComposerFocused()) {
+      return;
+    }
+    focusPane("actions");
+  });
+
   screen.key(["h"], () => {
-    if (helpModalOpen || screen.focused === composer) {
+    if (helpModalOpen || isComposerFocused()) {
       return;
     }
     showHelp();
   });
 
-  composer.key("escape", () => {
-    composer.clearValue();
-    focusPane("agents");
-  });
-
   modal.key(["escape", "enter", "q"], () => {
     closeModal();
+  });
+
+  screen.on("keypress", (ch: string, key: { ctrl?: boolean; meta?: boolean; name?: string }) => {
+    if (helpModalOpen || !isComposerFocused()) {
+      return;
+    }
+
+    if (swallowNextComposerKeypress) {
+      swallowNextComposerKeypress = false;
+      renderAll();
+      return;
+    }
+
+    if (key.ctrl || key.meta) {
+      return;
+    }
+
+    if (key.name === "escape") {
+      composerValue = "";
+      composerEditing = false;
+      focusPane("agents");
+      return;
+    }
+
+    if (key.name === "backspace") {
+      composerValue = composerValue.slice(0, -1);
+      renderAll();
+      return;
+    }
+
+    if (key.name === "enter") {
+      void handleComposerSubmit(composerValue).catch((error) => {
+        showError(error instanceof Error ? error.message : String(error));
+        focusPane("composer");
+      });
+      return;
+    }
+
+    if (key.name === "tab") {
+      cycleFocus(1);
+      return;
+    }
+
+    if (key.name === "linefeed") {
+      return;
+    }
+
+    if (typeof ch === "string" && ch.length > 0) {
+      composerValue += ch;
+      renderAll();
+    }
   });
 }
 
@@ -1422,11 +1527,8 @@ function wireInteractions(): void {
     });
   });
 
-  composer.on("submit", (value: unknown) => {
-    void handleComposerSubmit(String(value)).catch((error) => {
-      showError(error instanceof Error ? error.message : String(error));
-      focusPane("composer");
-    });
+  composer.on("click", () => {
+    focusPane("composer");
   });
 }
 
@@ -1459,25 +1561,6 @@ async function main(): Promise<void> {
     clearInterval(heartbeatTimer);
     clearInterval(pollTimer);
     void shutdown(0);
-  });
-
-  dmButton.on("focus", () => {
-    activePane = "agents";
-  });
-  roomButton.on("focus", () => {
-    activePane = "rooms";
-  });
-  replyButton.on("focus", () => {
-    activePane = "thread";
-  });
-  leaveButton.on("focus", () => {
-    activePane = "thread";
-  });
-  refreshButton.on("focus", () => {
-    activePane = "thread";
-  });
-  helpButton.on("focus", () => {
-    activePane = "thread";
   });
 
   renderAll();

@@ -80,7 +80,8 @@ The operator client registers you as a `human-operator` agent and opens a full-s
 - a live agent list with unread badges
 - a room list for shared conversations
 - a thread pane for the active DM or room
-- a composer that still accepts slash commands as a fallback
+- an Actions strip you can focus from the keyboard
+- a composer with direct typing and slash-command fallback
 
 On Windows Terminal and other mouse-aware terminals, the agent and room panes are clickable.
 
@@ -89,7 +90,11 @@ Primary interactions:
 ```text
 Click an agent row           Open a DM
 Click a room row             Open that room
-Tab / Shift+Tab              Cycle panes
+Tab / Shift+Tab              Cycle panes, including Actions
+Left / Right                 Move across the Actions strip
+Enter                        Run the selected Action or send composer text
+Esc                          Clear the composer and leave edit mode
+x                            Jump to the Actions strip
 Ctrl+R                       Reply to the last inbound sender
 Ctrl+L                       Leave the current DM or room
 F5                           Refresh agents and the current thread
