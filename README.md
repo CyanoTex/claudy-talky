@@ -94,6 +94,7 @@ Tab / Shift+Tab              Cycle panes, including Actions
 Left / Right                 Move across the Actions strip
 Enter                        Run the selected Action or send composer text
 Esc                          Clear the composer and leave edit mode
+Ctrl+A                       Jump straight to the Actions strip
 x                            Jump to the Actions strip
 Ctrl+R                       Reply to the last inbound sender
 Ctrl+L                       Leave the current DM or room

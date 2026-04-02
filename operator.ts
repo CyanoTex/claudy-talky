@@ -564,6 +564,9 @@ function focusPane(pane: FocusPane): void {
   activePane = pane;
   composerEditing = pane === "composer";
   focusElementForPane(pane).focus();
+  if (pane === "actions") {
+    setNotice("Actions focused. Use Left/Right to choose an action and Enter to run it.");
+  }
   renderAll();
 }
 
@@ -760,6 +763,7 @@ function renderAll(): void {
   renderThread();
   renderComposer();
   screen.render();
+  screen.program.hideCursor();
 }
 
 function moveSelectedAction(direction: 1 | -1): void {
@@ -1508,6 +1512,13 @@ function wireKeyboardShortcuts(): void {
     focusPane("composer");
   });
 
+  screen.key(["C-a"], () => {
+    if (helpModalOpen) {
+      return;
+    }
+    focusPane("actions");
+  });
+
   screen.key(["x"], () => {
     if (helpModalOpen || isComposerFocused()) {
       return;
@@ -1534,6 +1545,11 @@ function wireKeyboardShortcuts(): void {
     if (swallowNextComposerKeypress) {
       swallowNextComposerKeypress = false;
       renderAll();
+      return;
+    }
+
+    if (key.ctrl && key.name === "a") {
+      focusPane("actions");
       return;
     }
 

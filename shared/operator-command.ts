@@ -183,6 +183,7 @@ Tab / Shift+Tab cycle panes
 Left / Right move across the Actions strip
 Enter runs the selected Action or sends the composer text
 Esc clears the composer and leaves edit mode
+Ctrl+A jumps straight to the Actions strip
 x jumps to the Actions strip
 
 Use refs from /agents, for example: /dm codex, /dm claude:claudy-talky Ping, /msg "Codex @ claudy-talky" "Need a quick status?"`;
