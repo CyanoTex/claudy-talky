@@ -1444,6 +1444,7 @@ async function runCommand(command: OperatorCommand): Promise<void> {
 async function handleComposerSubmit(rawValue: string): Promise<void> {
   const value = rawValue.trim();
   composerValue = "";
+  renderAll();
 
   if (!value) {
     setNotice("Composer cleared.", "warn");
