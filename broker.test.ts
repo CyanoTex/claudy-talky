@@ -414,7 +414,7 @@ test("registers agents, tracks threaded history, and separates surfaced from see
   expect(health.unread_messages).toBe(0);
   expect(health.undelivered_messages).toBe(0);
   expect(health.surfaced_unseen_messages).toBe(0);
-  expect(health.schema_version).toBe(5);
+  expect(health.schema_version).toBe(6);
   expect(health.stale_agent_ms).toBe(10000);
   expect(health.cleanup_interval_ms).toBe(5000);
 });
@@ -610,4 +610,196 @@ test("admin removal deletes an agent row without the agent auth token", async ()
   });
 
   expect(agents.some((agent) => agent.id === target.id)).toBe(false);
+});
+
+test("creates handoffs, tracks work state, and records work events", async () => {
+  const operator = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Operator",
+      kind: "human-operator",
+      transport: "ink-tui",
+      capabilities: ["messaging"],
+      summary: "Running work handoffs.",
+    }
+  );
+
+  const codex = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Codex",
+      kind: "openai-codex",
+      transport: "mcp-stdio",
+      capabilities: ["messaging"],
+      summary: "Ready for work.",
+    }
+  );
+
+  const handoff = await brokerFetch<{
+    ok: boolean;
+    work?: {
+      id: number;
+      owner_id: string | null;
+      status: string;
+      conversation_id: string | null;
+    };
+    notification_message?: {
+      id: number;
+      conversation_id: string;
+      text: string;
+    };
+  }>("/handoff-work", {
+    agent_id: operator.id,
+    to_id: codex.id,
+    summary: "Fix operator work handoff UX",
+    auth_token: operator.auth_token,
+    notify_message: true,
+  });
+
+  expect(handoff.ok).toBe(true);
+  expect(handoff.work?.owner_id).toBe(codex.id);
+  expect(handoff.work?.status).toBe("assigned");
+  expect(handoff.work?.conversation_id ?? undefined).toMatch(/^conv-/);
+  expect(handoff.notification_message?.text).toContain("Handoff #");
+
+  const handoffMessage = await brokerFetch<{
+    messages: Array<{ text: string; conversation_id: string }>;
+  }>("/poll-messages", {
+    id: codex.id,
+    auth_token: codex.auth_token,
+  });
+
+  expect(handoffMessage.messages).toHaveLength(1);
+  expect(handoffMessage.messages[0]?.text).toContain("Fix operator work handoff UX");
+  expect(handoffMessage.messages[0]?.conversation_id).toBe(
+    handoff.work?.conversation_id ?? undefined
+  );
+
+  const listed = await brokerFetch<{
+    work_items: Array<{ id: number; owner_id: string | null; status: string }>;
+  }>("/list-work", {
+    agent_id: operator.id,
+    owner_id: codex.id,
+    include_done: true,
+    auth_token: operator.auth_token,
+  });
+
+  expect(listed.work_items.some((work) => work.id === handoff.work?.id)).toBe(true);
+
+  const detail = await brokerFetch<{
+    work: {
+      id: number;
+      status: string;
+      owner_id: string | null;
+      blocker_note: string | null;
+    } | null;
+    events: Array<{ kind: string; status: string | null; note: string | null }>;
+  }>("/get-work", {
+    agent_id: operator.id,
+    work_id: handoff.work?.id,
+    auth_token: operator.auth_token,
+  });
+
+  expect(detail.work?.id).toBe(handoff.work?.id);
+  expect(detail.events[0]?.kind).toBe("handoff");
+  expect(detail.events[0]?.status).toBe("assigned");
+
+  const operatorTakeRejected = await brokerFetch<{
+    ok: boolean;
+    error?: string;
+  }>("/update-work-status", {
+    agent_id: operator.id,
+    work_id: handoff.work?.id,
+    action: "take",
+    auth_token: operator.auth_token,
+  });
+
+  expect(operatorTakeRejected.ok).toBe(false);
+  expect(operatorTakeRejected.error).toContain(codex.id);
+
+  const taken = await brokerFetch<{
+    ok: boolean;
+    work?: { status: string; owner_id: string | null; blocker_note: string | null };
+  }>("/update-work-status", {
+    agent_id: codex.id,
+    work_id: handoff.work?.id,
+    action: "take",
+    auth_token: codex.auth_token,
+  });
+
+  expect(taken.ok).toBe(true);
+  expect(taken.work?.status).toBe("active");
+  expect(taken.work?.owner_id).toBe(codex.id);
+  expect(taken.work?.blocker_note).toBeNull();
+
+  const blocked = await brokerFetch<{
+    ok: boolean;
+    work?: { status: string; blocker_note: string | null };
+  }>("/update-work-status", {
+    agent_id: codex.id,
+    work_id: handoff.work?.id,
+    action: "block",
+    note: "Waiting on repro steps",
+    auth_token: codex.auth_token,
+  });
+
+  expect(blocked.ok).toBe(true);
+  expect(blocked.work?.status).toBe("blocked");
+  expect(blocked.work?.blocker_note).toBe("Waiting on repro steps");
+
+  const operatorDoneRejected = await brokerFetch<{
+    ok: boolean;
+    error?: string;
+  }>("/update-work-status", {
+    agent_id: operator.id,
+    work_id: handoff.work?.id,
+    action: "done",
+    note: "Shipped",
+    auth_token: operator.auth_token,
+  });
+
+  expect(operatorDoneRejected.ok).toBe(false);
+  expect(operatorDoneRejected.error).toContain(codex.id);
+
+  const done = await brokerFetch<{
+    ok: boolean;
+    work?: { status: string; blocker_note: string | null; owner_id: string | null };
+  }>("/update-work-status", {
+    agent_id: codex.id,
+    work_id: handoff.work?.id,
+    action: "done",
+    note: "Shipped",
+    auth_token: codex.auth_token,
+  });
+
+  expect(done.ok).toBe(true);
+  expect(done.work?.status).toBe("done");
+  expect(done.work?.blocker_note).toBeNull();
+  expect(done.work?.owner_id).toBe(codex.id);
+
+  const doneHidden = await brokerFetch<{
+    work_items: Array<{ id: number }>;
+  }>("/list-work", {
+    agent_id: operator.id,
+    owner_id: codex.id,
+    auth_token: operator.auth_token,
+  });
+
+  expect(doneHidden.work_items.some((work) => work.id === handoff.work?.id)).toBe(false);
+
+  const finalDetail = await brokerFetch<{
+    events: Array<{ kind: string; status: string | null; note: string | null }>;
+  }>("/get-work", {
+    agent_id: operator.id,
+    work_id: handoff.work?.id,
+    auth_token: operator.auth_token,
+  });
+
+  expect(finalDetail.events.map((event) => event.kind)).toEqual([
+    "handoff",
+    "take",
+    "block",
+    "done",
+  ]);
+  expect(finalDetail.events.at(-1)?.note).toBe("Shipped");
 });

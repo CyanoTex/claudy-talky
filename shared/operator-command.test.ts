@@ -27,6 +27,89 @@ test("parses DM and room slash commands", () => {
     kind: "reply",
   });
 
+  expect(parseOperatorInput("/handoff codex Fix operator scroll UX")).toEqual({
+    kind: "handoff",
+    agentSelector: "codex",
+    summary: "Fix operator scroll UX",
+  });
+
+  expect(parseOperatorInput("/handoff-work codex Fix operator scroll UX")).toEqual({
+    kind: "handoff",
+    agentSelector: "codex",
+    summary: "Fix operator scroll UX",
+  });
+
+  expect(parseOperatorInput("/work")).toEqual({
+    kind: "work-list",
+    filter: "open",
+  });
+
+  expect(parseOperatorInput("/work mine")).toEqual({
+    kind: "work-list",
+    filter: "mine",
+  });
+
+  expect(parseOperatorInput("/list-work blocked")).toEqual({
+    kind: "work-list",
+    filter: "blocked",
+  });
+
+  expect(parseOperatorInput("/work 12")).toEqual({
+    kind: "work-open",
+    workId: 12,
+  });
+
+  expect(parseOperatorInput("/get-work 12")).toEqual({
+    kind: "work-open",
+    workId: 12,
+  });
+
+  expect(parseOperatorInput("/take 12")).toEqual({
+    kind: "take",
+    workId: 12,
+  });
+
+  expect(parseOperatorInput("/block 12 waiting on repro steps")).toEqual({
+    kind: "block",
+    workId: 12,
+    reason: "waiting on repro steps",
+  });
+
+  expect(parseOperatorInput("/done 12 shipped")).toEqual({
+    kind: "done",
+    workId: 12,
+    note: "shipped",
+  });
+
+  expect(parseOperatorInput("/activate 12 resumed")).toEqual({
+    kind: "activate",
+    workId: 12,
+    note: "resumed",
+  });
+
+  expect(parseOperatorInput("/update-work-status 12 take")).toEqual({
+    kind: "take",
+    workId: 12,
+  });
+
+  expect(parseOperatorInput("/update-work-status 12 block waiting on logs")).toEqual({
+    kind: "block",
+    workId: 12,
+    reason: "waiting on logs",
+  });
+
+  expect(parseOperatorInput("/update-work-status 12 done shipped")).toEqual({
+    kind: "done",
+    workId: 12,
+    note: "shipped",
+  });
+
+  expect(parseOperatorInput("/update-work-status 12 activate resumed")).toEqual({
+    kind: "activate",
+    workId: 12,
+    note: "resumed",
+  });
+
   expect(parseOperatorInput("/details")).toEqual({
     kind: "details",
   });
@@ -99,6 +182,51 @@ test("rejects invalid room and history usage", () => {
     message: "Usage: /history [limit]",
   });
 
+  expect(parseOperatorInput("/handoff codex")).toEqual({
+    kind: "error",
+    message: "Usage: /handoff <agent-ref-or-name> <summary>",
+  });
+
+  expect(parseOperatorInput("/work unknown")).toEqual({
+    kind: "error",
+    message: "Usage: /work [open|all|mine|assigned|active|blocked|done|<id>] | /list-work [open|all|mine|assigned|active|blocked|done|<id>]",
+  });
+
+  expect(parseOperatorInput("/take nope")).toEqual({
+    kind: "error",
+    message: "Usage: /take <work-id>",
+  });
+
+  expect(parseOperatorInput("/block 7")).toEqual({
+    kind: "error",
+    message: "Usage: /block <work-id> <reason>",
+  });
+
+  expect(parseOperatorInput("/done nope")).toEqual({
+    kind: "error",
+    message: "Usage: /done <work-id> [note]",
+  });
+
+  expect(parseOperatorInput("/get-work nope")).toEqual({
+    kind: "error",
+    message: "Usage: /get-work <work-id>",
+  });
+
+  expect(parseOperatorInput("/activate nope")).toEqual({
+    kind: "error",
+    message: "Usage: /activate <work-id> [note]",
+  });
+
+  expect(parseOperatorInput("/update-work-status 12")).toEqual({
+    kind: "error",
+    message: "Usage: /update-work-status <work-id> <take|block|done|activate> [note]",
+  });
+
+  expect(parseOperatorInput("/update-work-status 12 nope")).toEqual({
+    kind: "error",
+    message: "Usage: /update-work-status <work-id> <take|block|done|activate> [note]",
+  });
+
   expect(parseOperatorInput("/details loud")).toEqual({
     kind: "error",
     message: "Usage: /details [minimal|compact|verbose]",
@@ -121,6 +249,16 @@ test("rejects invalid room and history usage", () => {
 });
 
 test("help text documents the operator slash commands", () => {
+  expect(operatorHelpText()).toContain("/handoff <agent-ref-or-name> <summary>");
+  expect(operatorHelpText()).toContain("/handoff-work <agent-ref-or-name> <summary>");
+  expect(operatorHelpText()).toContain("/work [open|all|mine|assigned|active|blocked|done|<id>]");
+  expect(operatorHelpText()).toContain("/list-work [open|all|mine|assigned|active|blocked|done|<id>]");
+  expect(operatorHelpText()).toContain("/get-work <work-id>");
+  expect(operatorHelpText()).toContain("/take <work-id>");
+  expect(operatorHelpText()).toContain("/block <work-id> <reason>");
+  expect(operatorHelpText()).toContain("/done <work-id> [note]");
+  expect(operatorHelpText()).toContain("/activate <work-id> [note]");
+  expect(operatorHelpText()).toContain("/update-work-status <work-id> <take|block|done|activate> [note]");
   expect(operatorHelpText()).toContain("/dm <agent-ref-or-name> [message]");
   expect(operatorHelpText()).toContain("/msg <agent-ref-or-name> <message>");
   expect(operatorHelpText()).toContain("/leave");

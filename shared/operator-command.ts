@@ -3,6 +3,13 @@ export type OperatorCommand =
   | { kind: "quit" }
   | { kind: "leave" }
   | { kind: "reply" }
+  | { kind: "handoff"; agentSelector: string; summary: string }
+  | { kind: "work-list"; filter: "open" | "all" | "mine" | "assigned" | "active" | "blocked" | "done" }
+  | { kind: "work-open"; workId: number }
+  | { kind: "take"; workId: number }
+  | { kind: "block"; workId: number; reason: string }
+  | { kind: "done"; workId: number; note?: string }
+  | { kind: "activate"; workId: number; note?: string }
   | { kind: "details"; mode?: "minimal" | "compact" | "verbose" }
   | { kind: "agents" }
   | { kind: "rooms" }
@@ -104,6 +111,92 @@ export function parseOperatorInput(line: string): OperatorCommand {
       return { kind: "leave" };
     case "reply":
       return { kind: "reply" };
+    case "handoff":
+    case "handoff-work":
+      return subcommand && rest.length > 0
+        ? {
+            kind: "handoff",
+            agentSelector: subcommand,
+            summary: rest.join(" "),
+          }
+        : { kind: "error", message: "Usage: /handoff <agent-ref-or-name> <summary>" };
+    case "work":
+    case "list-work": {
+      if (!subcommand) {
+        return { kind: "work-list", filter: "open" };
+      }
+
+      if (["open", "all", "mine", "assigned", "active", "blocked", "done"].includes(subcommand)) {
+        return {
+          kind: "work-list",
+          filter: subcommand as "open" | "all" | "mine" | "assigned" | "active" | "blocked" | "done",
+        };
+      }
+
+      const workId = Number.parseInt(subcommand, 10);
+      return Number.isInteger(workId) && workId > 0
+        ? { kind: "work-open", workId }
+        : { kind: "error", message: "Usage: /work [open|all|mine|assigned|active|blocked|done|<id>] | /list-work [open|all|mine|assigned|active|blocked|done|<id>]" };
+    }
+    case "get-work": {
+      const workId = Number.parseInt(subcommand ?? "", 10);
+      return Number.isInteger(workId) && workId > 0
+        ? { kind: "work-open", workId }
+        : { kind: "error", message: "Usage: /get-work <work-id>" };
+    }
+    case "take": {
+      const workId = Number.parseInt(subcommand ?? "", 10);
+      return Number.isInteger(workId) && workId > 0
+        ? { kind: "take", workId }
+        : { kind: "error", message: "Usage: /take <work-id>" };
+    }
+    case "block": {
+      const workId = Number.parseInt(subcommand ?? "", 10);
+      return Number.isInteger(workId) && workId > 0 && rest.length > 0
+        ? { kind: "block", workId, reason: rest.join(" ") }
+        : { kind: "error", message: "Usage: /block <work-id> <reason>" };
+    }
+    case "done": {
+      const workId = Number.parseInt(subcommand ?? "", 10);
+      return Number.isInteger(workId) && workId > 0
+        ? { kind: "done", workId, note: rest.length > 0 ? rest.join(" ") : undefined }
+        : { kind: "error", message: "Usage: /done <work-id> [note]" };
+    }
+    case "activate": {
+      const workId = Number.parseInt(subcommand ?? "", 10);
+      return Number.isInteger(workId) && workId > 0
+        ? { kind: "activate", workId, note: rest.length > 0 ? rest.join(" ") : undefined }
+        : { kind: "error", message: "Usage: /activate <work-id> [note]" };
+    }
+    case "update-work-status": {
+      const workId = Number.parseInt(subcommand ?? "", 10);
+      const action = rest[0];
+      const note = rest.slice(1).join(" ");
+      if (!Number.isInteger(workId) || workId <= 0 || !action) {
+        return {
+          kind: "error",
+          message: "Usage: /update-work-status <work-id> <take|block|done|activate> [note]",
+        };
+      }
+
+      switch (action) {
+        case "take":
+          return { kind: "take", workId };
+        case "block":
+          return note
+            ? { kind: "block", workId, reason: note }
+            : { kind: "error", message: "Usage: /block <work-id> <reason>" };
+        case "done":
+          return { kind: "done", workId, note: note || undefined };
+        case "activate":
+          return { kind: "activate", workId, note: note || undefined };
+        default:
+          return {
+            kind: "error",
+            message: "Usage: /update-work-status <work-id> <take|block|done|activate> [note]",
+          };
+      }
+    }
     case "details":
       if (!subcommand) {
         return { kind: "details" };
@@ -179,6 +272,16 @@ return `Slash commands:
 /help
 /leave
 /agents
+/handoff <agent-ref-or-name> <summary>
+/handoff-work <agent-ref-or-name> <summary>
+/work [open|all|mine|assigned|active|blocked|done|<id>]
+/list-work [open|all|mine|assigned|active|blocked|done|<id>]
+/get-work <work-id>
+/take <work-id>
+/block <work-id> <reason>
+/done <work-id> [note]
+/activate <work-id> [note]
+/update-work-status <work-id> <take|block|done|activate> [note]
 /reply
 /details [minimal|compact|verbose]
 /dm <agent-ref-or-name> [message]

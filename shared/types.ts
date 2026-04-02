@@ -36,6 +36,34 @@ export interface Message {
   seen_at: string | null;
 }
 
+export type WorkStatus = "assigned" | "active" | "blocked" | "done";
+export type WorkEventKind = "handoff" | "take" | "block" | "done" | "status";
+
+export interface WorkItem {
+  id: number;
+  title: string;
+  summary: string;
+  conversation_id: string | null;
+  created_by_id: AgentId;
+  owner_id: AgentId | null;
+  status: WorkStatus;
+  blocker_note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkEvent {
+  id: number;
+  work_id: number;
+  actor_id: AgentId;
+  kind: WorkEventKind;
+  from_owner_id: AgentId | null;
+  to_owner_id: AgentId | null;
+  status: WorkStatus | null;
+  note: string | null;
+  created_at: string;
+}
+
 export interface RegisterAgentRequest {
   pid?: number | null;
   name?: string;
@@ -145,6 +173,64 @@ export interface RemoveAgentAdminRequest {
 export interface RemoveAgentAdminResponse {
   ok: boolean;
   removed: boolean;
+}
+
+export interface HandoffWorkRequest {
+  agent_id: AgentId;
+  to_id: AgentId;
+  summary: string;
+  title?: string;
+  conversation_id?: string | null;
+  notify_message?: boolean;
+  auth_token?: string;
+}
+
+export interface HandoffWorkResponse {
+  ok: boolean;
+  error?: string;
+  work?: WorkItem;
+  event?: WorkEvent;
+  notification_message?: Message;
+}
+
+export interface ListWorkRequest {
+  agent_id: AgentId;
+  status?: WorkStatus;
+  owner_id?: AgentId;
+  conversation_id?: string;
+  include_done?: boolean;
+  limit?: number;
+  auth_token?: string;
+}
+
+export interface ListWorkResponse {
+  work_items: WorkItem[];
+}
+
+export interface GetWorkRequest {
+  agent_id: AgentId;
+  work_id: number;
+  auth_token?: string;
+}
+
+export interface GetWorkResponse {
+  work: WorkItem | null;
+  events: WorkEvent[];
+}
+
+export interface UpdateWorkStatusRequest {
+  agent_id: AgentId;
+  work_id: number;
+  action: "take" | "block" | "done" | "activate";
+  note?: string | null;
+  auth_token?: string;
+}
+
+export interface UpdateWorkStatusResponse {
+  ok: boolean;
+  error?: string;
+  work?: WorkItem;
+  event?: WorkEvent;
 }
 
 export interface BrokerHealthResponse {

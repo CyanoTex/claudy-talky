@@ -29,6 +29,10 @@ import {
   replyToMessageIdValue,
 } from "./shared/message-format.ts";
 import {
+  formatWorkDetailLines,
+  formatWorkListLine,
+} from "./shared/work-format.ts";
+import {
   acknowledgeMessagesCompatible,
   brokerFetch,
   listAgentsCompatible,
@@ -49,9 +53,13 @@ import {
 import type {
   Agent,
   AgentId,
+  GetWorkResponse,
+  HandoffWorkResponse,
+  ListWorkResponse,
   Message,
   PollMessagesResponse,
   SendMessageResponse,
+  UpdateWorkStatusResponse,
   WhoAmIResponse,
 } from "./shared/types.ts";
 
@@ -206,6 +214,18 @@ async function listAgentsById(): Promise<Map<AgentId, Agent>> {
   return new Map(agents.map((agent) => [agent.id, agent]));
 }
 
+function workParticipantDisplay(
+  agentsById: Map<AgentId, Agent>,
+  selfId: AgentId,
+  agentId: AgentId
+): string {
+  if (agentId === selfId) {
+    return "You";
+  }
+
+  return agentsById.get(agentId)?.name ?? agentId;
+}
+
 const mcp = new Server(
   { name: "claudy-talky", version: "0.4.0" },
   {
@@ -224,6 +244,10 @@ Available tools:
 - list_agents: Discover other connected agents on this machine
 - send_message: Send a message to another agent by ID
 - message_history: Revisit recent messages or a specific conversation
+- list_work: Inspect current handoff and work items
+- get_work: Inspect one work item in detail
+- handoff_work: Hand work to another agent and notify them
+- update_work_status: Take, block, or complete a work item
 - set_summary: Set a 1-2 sentence summary of what you're working on
 - check_messages: Manually check for new messages
 
@@ -325,6 +349,103 @@ const TOOLS = [
           description: "Maximum number of messages to return. Defaults to 20.",
         },
       },
+    },
+  },
+  {
+    name: "list_work",
+    description:
+      "List current work and handoff items. Filter by status, owner, or conversation when you need to inspect outstanding collaboration state.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        status: {
+          type: "string" as const,
+          enum: ["assigned", "active", "blocked", "done"],
+          description: "Optional work status filter.",
+        },
+        owner_id: {
+          type: "string" as const,
+          description: "Optional owner agent ID filter.",
+        },
+        conversation_id: {
+          type: "string" as const,
+          description: "Optional conversation ID filter.",
+        },
+        include_done: {
+          type: "boolean" as const,
+          description: "Include done work items when no explicit status filter is set.",
+        },
+        limit: {
+          type: "number" as const,
+          description: "Maximum number of work items to return. Defaults to 20.",
+        },
+      },
+    },
+  },
+  {
+    name: "get_work",
+    description:
+      "Show the full details and event history for one work item.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        work_id: {
+          type: "number" as const,
+          description: "Work item ID.",
+        },
+      },
+      required: ["work_id"],
+    },
+  },
+  {
+    name: "handoff_work",
+    description:
+      "Create a new handoff item for another agent and notify them in-thread when possible.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        to_id: {
+          type: "string" as const,
+          description: "Target agent ID from list_agents.",
+        },
+        summary: {
+          type: "string" as const,
+          description: "What needs to be done and why.",
+        },
+        title: {
+          type: "string" as const,
+          description: "Optional short title. If omitted, the first summary line is used.",
+        },
+        conversation_id: {
+          type: "string" as const,
+          description: "Optional conversation ID to attach the handoff to an existing thread.",
+        },
+      },
+      required: ["to_id", "summary"],
+    },
+  },
+  {
+    name: "update_work_status",
+    description:
+      "Update a work item by taking it, blocking it, marking it done, or returning it to active.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        work_id: {
+          type: "number" as const,
+          description: "Work item ID.",
+        },
+        action: {
+          type: "string" as const,
+          enum: ["take", "block", "done", "activate"],
+          description: "Status transition to apply.",
+        },
+        note: {
+          type: "string" as const,
+          description: "Optional note or blocker reason.",
+        },
+      },
+      required: ["work_id", "action"],
     },
   },
   {
@@ -564,6 +685,240 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text" as const,
               text: `Error loading history: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "list_work": {
+      if (!myId) {
+        return {
+          content: [{ type: "text" as const, text: "Not registered with broker yet" }],
+          isError: true,
+        };
+      }
+
+      try {
+        const { status, owner_id, conversation_id, include_done, limit } = args as {
+          status?: "assigned" | "active" | "blocked" | "done";
+          owner_id?: string;
+          conversation_id?: string;
+          include_done?: boolean;
+          limit?: number;
+        };
+
+        const result = await brokerFetch<ListWorkResponse>(
+          BROKER_URL,
+          "/list-work",
+          withAuth({
+            agent_id: myId,
+            status,
+            owner_id,
+            conversation_id,
+            include_done,
+            limit,
+          })
+        );
+
+        if (result.work_items.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "No matching work items found." }],
+          };
+        }
+
+        const agentsById = await listAgentsById();
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `${result.work_items.length} work item(s):\n\n${result.work_items
+                .map((work) =>
+                  formatWorkListLine(work, (agentId) =>
+                    workParticipantDisplay(agentsById, myId!, agentId)
+                  )
+                )
+                .join("\n")}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error listing work: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_work": {
+      if (!myId) {
+        return {
+          content: [{ type: "text" as const, text: "Not registered with broker yet" }],
+          isError: true,
+        };
+      }
+
+      try {
+        const { work_id } = args as { work_id: number };
+        const result = await brokerFetch<GetWorkResponse>(
+          BROKER_URL,
+          "/get-work",
+          withAuth({ agent_id: myId, work_id })
+        );
+
+        if (!result.work) {
+          return {
+            content: [{ type: "text" as const, text: `Work item #${work_id} not found.` }],
+            isError: true,
+          };
+        }
+
+        const agentsById = await listAgentsById();
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatWorkDetailLines(
+                result.work,
+                result.events,
+                (agentId) => workParticipantDisplay(agentsById, myId!, agentId)
+              ).join("\n"),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error loading work item: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "handoff_work": {
+      if (!myId) {
+        return {
+          content: [{ type: "text" as const, text: "Not registered with broker yet" }],
+          isError: true,
+        };
+      }
+
+      try {
+        const { to_id, summary, title, conversation_id } = args as {
+          to_id: string;
+          summary: string;
+          title?: string;
+          conversation_id?: string;
+        };
+
+        const result = await brokerFetch<HandoffWorkResponse>(
+          BROKER_URL,
+          "/handoff-work",
+          withAuth({
+            agent_id: myId,
+            to_id,
+            summary,
+            title,
+            conversation_id,
+            notify_message: true,
+          })
+        );
+
+        if (!result.ok || !result.work) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Failed to create handoff: ${result.error ?? "unknown error"}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Created handoff #${result.work.id} for agent ${to_id}${result.notification_message ? ` (message #${result.notification_message.id}, conversation ${result.notification_message.conversation_id})` : ""}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error creating handoff: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "update_work_status": {
+      if (!myId) {
+        return {
+          content: [{ type: "text" as const, text: "Not registered with broker yet" }],
+          isError: true,
+        };
+      }
+
+      try {
+        const { work_id, action, note } = args as {
+          work_id: number;
+          action: "take" | "block" | "done" | "activate";
+          note?: string;
+        };
+
+        const result = await brokerFetch<UpdateWorkStatusResponse>(
+          BROKER_URL,
+          "/update-work-status",
+          withAuth({
+            agent_id: myId,
+            work_id,
+            action,
+            note,
+          })
+        );
+
+        if (!result.ok || !result.work) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Failed to update work #${work_id}: ${result.error ?? "unknown error"}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Updated work #${result.work.id} to ${result.work.status}.`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error updating work item: ${error instanceof Error ? error.message : String(error)}`,
             },
           ],
           isError: true,

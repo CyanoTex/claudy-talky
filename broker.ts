@@ -42,14 +42,26 @@ import type {
   MessageHistoryResponse,
   PollMessagesRequest,
   PollMessagesResponse,
+  ListWorkRequest,
+  ListWorkResponse,
+  GetWorkRequest,
+  GetWorkResponse,
   RemoveAgentAdminRequest,
   RemoveAgentAdminResponse,
   RegisterAgentRequest,
   RegisterAgentResponse,
+  HandoffWorkRequest,
+  HandoffWorkResponse,
   SendMessageRequest,
   SendMessageResponse,
   SetSummaryRequest,
+  UpdateWorkStatusRequest,
+  UpdateWorkStatusResponse,
   UnregisterRequest,
+  WorkEvent,
+  WorkEventKind,
+  WorkItem,
+  WorkStatus,
 } from "./shared/types.ts";
 
 const PORT = getBrokerPort();
@@ -57,7 +69,7 @@ const PRIMARY_DB_PATH = getDbPath();
 const LOCK_PATH = getBrokerLockPath(PORT);
 const STALE_AGENT_MS = getStaleAgentMs();
 const CLEANUP_INTERVAL_MS = getCleanupIntervalMs();
-const LATEST_SCHEMA_VERSION = 5;
+const LATEST_SCHEMA_VERSION = 6;
 const DEFAULT_HISTORY_LIMIT = 20;
 const MAX_HISTORY_LIMIT = 100;
 
@@ -110,6 +122,31 @@ type MessageTotalsRow = {
   unread_messages: number | bigint | null;
   undelivered_messages: number | bigint | null;
   surfaced_unseen_messages: number | bigint | null;
+};
+
+type WorkItemRow = {
+  id: number;
+  title: string;
+  summary: string;
+  conversation_id: string | null;
+  created_by_id: string;
+  owner_id: string | null;
+  status: string;
+  blocker_note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type WorkEventRow = {
+  id: number;
+  work_id: number;
+  actor_id: string;
+  kind: string;
+  from_owner_id: string | null;
+  to_owner_id: string | null;
+  status: string | null;
+  note: string | null;
+  created_at: string;
 };
 
 class BrokerRequestError extends Error {
@@ -466,6 +503,60 @@ function applyMigrations() {
     version = 5;
   }
 
+  if (version < 6) {
+    runMigration(6, "add work items and handoff events", () => {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS work_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          conversation_id TEXT,
+          created_by_id TEXT NOT NULL,
+          owner_id TEXT,
+          status TEXT NOT NULL,
+          blocker_note TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (created_by_id) REFERENCES agents(id),
+          FOREIGN KEY (owner_id) REFERENCES agents(id)
+        )
+      `);
+
+      db.run(`
+        CREATE TABLE IF NOT EXISTS work_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          work_id INTEGER NOT NULL,
+          actor_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          from_owner_id TEXT,
+          to_owner_id TEXT,
+          status TEXT,
+          note TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (work_id) REFERENCES work_items(id),
+          FOREIGN KEY (actor_id) REFERENCES agents(id)
+        )
+      `);
+
+      db.run(`
+        CREATE INDEX IF NOT EXISTS idx_work_items_owner_status
+        ON work_items (owner_id, status, updated_at, id)
+      `);
+
+      db.run(`
+        CREATE INDEX IF NOT EXISTS idx_work_items_conversation
+        ON work_items (conversation_id, updated_at, id)
+      `);
+
+      db.run(`
+        CREATE INDEX IF NOT EXISTS idx_work_events_work
+        ON work_events (work_id, created_at, id)
+      `);
+    });
+
+    version = 6;
+  }
+
   if (version !== LATEST_SCHEMA_VERSION) {
     throw new Error(
       `Unexpected schema version after migration: ${version} (expected ${LATEST_SCHEMA_VERSION})`
@@ -572,6 +663,53 @@ function normalizeHistoryLimit(value: unknown): number {
   return Math.min(limit, MAX_HISTORY_LIMIT);
 }
 
+function normalizeWorkId(value: unknown): number {
+  const id = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(id) && id > 0 ? id : 0;
+}
+
+function normalizeWorkStatus(value: unknown): WorkStatus | null {
+  const status = normalizeText(value).toLowerCase();
+  switch (status) {
+    case "assigned":
+    case "active":
+    case "blocked":
+    case "done":
+      return status;
+    default:
+      return null;
+  }
+}
+
+function normalizeWorkAction(
+  value: unknown
+): UpdateWorkStatusRequest["action"] | null {
+  const action = normalizeText(value).toLowerCase();
+  switch (action) {
+    case "take":
+    case "block":
+    case "done":
+    case "activate":
+      return action;
+    default:
+      return null;
+  }
+}
+
+function deriveWorkTitle(summary: string, rawTitle: unknown): string {
+  const explicitTitle = normalizeText(rawTitle);
+  if (explicitTitle) {
+    return explicitTitle.slice(0, 120);
+  }
+
+  const firstLine = summary
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  return (firstLine ?? summary).slice(0, 120);
+}
+
 function parseJsonArray(value: string): string[] {
   try {
     return normalizeCapabilities(JSON.parse(value));
@@ -629,6 +767,35 @@ function toMessage(row: MessageRow): Message {
     surfaced_at: row.surfaced_at ?? null,
     opened_at: row.opened_at ?? null,
     seen_at: row.seen_at ?? null,
+  };
+}
+
+function toWorkItem(row: WorkItemRow): WorkItem {
+  return {
+    id: row.id,
+    title: row.title,
+    summary: row.summary,
+    conversation_id: row.conversation_id ?? null,
+    created_by_id: row.created_by_id,
+    owner_id: row.owner_id ?? null,
+    status: normalizeWorkStatus(row.status) ?? "assigned",
+    blocker_note: row.blocker_note ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function toWorkEvent(row: WorkEventRow): WorkEvent {
+  return {
+    id: row.id,
+    work_id: row.work_id,
+    actor_id: row.actor_id,
+    kind: (normalizeText(row.kind) as WorkEventKind) || "status",
+    from_owner_id: row.from_owner_id ?? null,
+    to_owner_id: row.to_owner_id ?? null,
+    status: row.status ? normalizeWorkStatus(row.status) : null,
+    note: row.note ?? null,
+    created_at: row.created_at,
   };
 }
 
@@ -875,6 +1042,39 @@ const selectMessageTotals = db.prepare(`
   FROM messages
 `);
 
+const insertWorkItem = db.prepare(`
+  INSERT INTO work_items (
+    title, summary, conversation_id, created_by_id, owner_id,
+    status, blocker_note, created_at, updated_at
+  )
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+const updateWorkItem = db.prepare(`
+  UPDATE work_items
+  SET owner_id = ?, status = ?, blocker_note = ?, updated_at = ?
+  WHERE id = ?
+`);
+
+const selectWorkRowById = db.prepare(`
+  SELECT * FROM work_items WHERE id = ?
+`);
+
+const selectAllWorkRows = db.prepare(`
+  SELECT * FROM work_items ORDER BY updated_at DESC, id DESC
+`);
+
+const insertWorkEvent = db.prepare(`
+  INSERT INTO work_events (
+    work_id, actor_id, kind, from_owner_id, to_owner_id, status, note, created_at
+  )
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+const selectWorkEventRowsByWorkId = db.prepare(`
+  SELECT * FROM work_events WHERE work_id = ? ORDER BY created_at ASC, id ASC
+`);
+
 function generateId(): string {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
   let id = "";
@@ -1011,21 +1211,25 @@ function handleListAgents(body: ListAgentsRequest): Agent[] {
     );
 }
 
-function handleSendMessage(body: SendMessageRequest): SendMessageResponse {
-  requireAgentAuth(body.from_id, body.auth_token);
-
-  const target = selectAgentRowById.get(body.to_id) as AgentRow | null;
+function insertStoredMessage(params: {
+  from_id: string;
+  to_id: string;
+  text: string;
+  conversation_id?: string | null;
+  reply_to_message_id?: number | null;
+}): SendMessageResponse {
+  const target = selectAgentRowById.get(params.to_id) as AgentRow | null;
   if (!target) {
-    return { ok: false, error: `Agent ${body.to_id} not found` };
+    return { ok: false, error: `Agent ${params.to_id} not found` };
   }
 
-  const text = normalizeText(body.text);
+  const text = normalizeText(params.text);
   if (!text) {
     return { ok: false, error: "Message text cannot be empty" };
   }
 
-  const replyToMessageId = normalizeReplyToMessageId(body.reply_to_message_id);
-  let conversationId = normalizeText(body.conversation_id);
+  const replyToMessageId = normalizeReplyToMessageId(params.reply_to_message_id);
+  let conversationId = normalizeText(params.conversation_id);
 
   if (replyToMessageId !== null) {
     const parent = selectMessageRowById.get(replyToMessageId) as MessageRow | null;
@@ -1034,7 +1238,7 @@ function handleSendMessage(body: SendMessageRequest): SendMessageResponse {
     }
 
     const participants = new Set([parent.from_id, parent.to_id]);
-    if (!participants.has(body.from_id) || !participants.has(body.to_id)) {
+    if (!participants.has(params.from_id) || !participants.has(params.to_id)) {
       return {
         ok: false,
         error: "Reply participants must match the original conversation",
@@ -1057,8 +1261,8 @@ function handleSendMessage(body: SendMessageRequest): SendMessageResponse {
 
   const sentAt = new Date().toISOString();
   const result = insertMessage.run(
-    body.from_id,
-    body.to_id,
+    params.from_id,
+    params.to_id,
     text,
     sentAt,
     conversationId,
@@ -1070,8 +1274,8 @@ function handleSendMessage(body: SendMessageRequest): SendMessageResponse {
     ok: true,
     message: {
       id,
-      from_id: body.from_id,
-      to_id: body.to_id,
+      from_id: params.from_id,
+      to_id: params.to_id,
       text,
       sent_at: sentAt,
       conversation_id: conversationId,
@@ -1082,6 +1286,267 @@ function handleSendMessage(body: SendMessageRequest): SendMessageResponse {
       opened_at: null,
       seen_at: null,
     },
+  };
+}
+
+function handleSendMessage(body: SendMessageRequest): SendMessageResponse {
+  requireAgentAuth(body.from_id, body.auth_token);
+  return insertStoredMessage(body);
+}
+
+function handleHandoffWork(body: HandoffWorkRequest): HandoffWorkResponse {
+  requireAgentAuth(body.agent_id, body.auth_token);
+
+  const target = selectAgentRowById.get(body.to_id) as AgentRow | null;
+  if (!target) {
+    return { ok: false, error: `Agent ${body.to_id} not found` };
+  }
+
+  const summary = normalizeText(body.summary);
+  if (!summary) {
+    return { ok: false, error: "Work summary cannot be empty" };
+  }
+
+  const notifyMessage =
+    body.notify_message === undefined ? true : normalizeBoolean(body.notify_message);
+  const conversationId =
+    normalizeOptionalText(body.conversation_id) ??
+    (notifyMessage ? generateConversationId() : null);
+  const title = deriveWorkTitle(summary, body.title);
+  const now = new Date().toISOString();
+
+  const result = insertWorkItem.run(
+    title,
+    summary,
+    conversationId,
+    body.agent_id,
+    body.to_id,
+    "assigned",
+    null,
+    now,
+    now
+  );
+  const workId = normalizeCount(result.lastInsertRowid);
+
+  const eventResult = insertWorkEvent.run(
+    workId,
+    body.agent_id,
+    "handoff",
+    null,
+    body.to_id,
+    "assigned",
+    summary,
+    now
+  );
+
+  const work = toWorkItem(
+    selectWorkRowById.get(workId) as WorkItemRow
+  );
+  const eventId = normalizeCount(eventResult.lastInsertRowid);
+  const event = toWorkEvent(
+    (selectWorkEventRowsByWorkId.all(workId) as WorkEventRow[]).find(
+      (row) => row.id === eventId
+    ) as WorkEventRow
+  );
+
+  let notificationMessage: Message | undefined;
+  if (notifyMessage) {
+    const sendResult = insertStoredMessage({
+      from_id: body.agent_id,
+      to_id: body.to_id,
+      text: `Handoff #${work.id}: ${work.title}\n${work.summary}`,
+      conversation_id: conversationId,
+    });
+
+    if (!sendResult.ok || !sendResult.message) {
+      return {
+        ok: false,
+        error: sendResult.error ?? "Failed to send handoff notification",
+      };
+    }
+
+    notificationMessage = sendResult.message;
+  }
+
+  return {
+    ok: true,
+    work,
+    event,
+    notification_message: notificationMessage,
+  };
+}
+
+function handleListWork(body: ListWorkRequest): ListWorkResponse {
+  requireAgentAuth(body.agent_id, body.auth_token);
+
+  const rows = selectAllWorkRows.all() as WorkItemRow[];
+  const requestedStatus = body.status ? normalizeWorkStatus(body.status) : null;
+  const requestedOwnerId = normalizeOptionalText(body.owner_id);
+  const requestedConversationId = normalizeOptionalText(body.conversation_id);
+  const includeDone = normalizeBoolean(body.include_done);
+  const limit = normalizeHistoryLimit(body.limit);
+
+  const filtered = rows
+    .map(toWorkItem)
+    .filter((work) => {
+      if (requestedStatus && work.status !== requestedStatus) {
+        return false;
+      }
+      if (requestedOwnerId && work.owner_id !== requestedOwnerId) {
+        return false;
+      }
+      if (requestedConversationId && work.conversation_id !== requestedConversationId) {
+        return false;
+      }
+      if (!includeDone && !requestedStatus && work.status === "done") {
+        return false;
+      }
+      return true;
+    })
+    .slice(0, limit);
+
+  return { work_items: filtered };
+}
+
+function handleGetWork(body: GetWorkRequest): GetWorkResponse {
+  requireAgentAuth(body.agent_id, body.auth_token);
+
+  const workId = normalizeWorkId(body.work_id);
+  if (workId <= 0) {
+    throw new BrokerRequestError(400, "work_id must be a positive integer");
+  }
+
+  const workRow = selectWorkRowById.get(workId) as WorkItemRow | null;
+  if (!workRow) {
+    return { work: null, events: [] };
+  }
+
+  const eventRows = selectWorkEventRowsByWorkId.all(workId) as WorkEventRow[];
+  return {
+    work: toWorkItem(workRow),
+    events: eventRows.map(toWorkEvent),
+  };
+}
+
+function handleUpdateWorkStatus(
+  body: UpdateWorkStatusRequest
+): UpdateWorkStatusResponse {
+  requireAgentAuth(body.agent_id, body.auth_token);
+
+  const workId = normalizeWorkId(body.work_id);
+  if (workId <= 0) {
+    return { ok: false, error: "work_id must be a positive integer" };
+  }
+
+  const action = normalizeWorkAction(body.action);
+  if (!action) {
+    return { ok: false, error: "Unknown work action" };
+  }
+
+  const workRow = selectWorkRowById.get(workId) as WorkItemRow | null;
+  if (!workRow) {
+    return { ok: false, error: `Work item #${workId} not found` };
+  }
+
+  const note = normalizeOptionalText(body.note);
+  const now = new Date().toISOString();
+  const currentWork = toWorkItem(workRow);
+
+  let nextOwnerId = currentWork.owner_id;
+  let nextStatus: WorkStatus = currentWork.status;
+  let blockerNote = currentWork.blocker_note;
+  let eventKind: WorkEventKind = "status";
+
+  switch (action) {
+    case "take":
+      if (currentWork.owner_id !== null && currentWork.owner_id !== body.agent_id) {
+        return {
+          ok: false,
+          error: `Work item #${workId} is owned by ${currentWork.owner_id}. Only the current owner can take it.`,
+        };
+      }
+      nextOwnerId = body.agent_id;
+      nextStatus = "active";
+      blockerNote = null;
+      eventKind = "take";
+      break;
+    case "block":
+      if (currentWork.owner_id === null) {
+        return {
+          ok: false,
+          error: `Work item #${workId} is unassigned. Take it before blocking it.`,
+        };
+      }
+      if (currentWork.owner_id !== body.agent_id) {
+        return {
+          ok: false,
+          error: `Work item #${workId} is owned by ${currentWork.owner_id}. Only the current owner can block it.`,
+        };
+      }
+      nextStatus = "blocked";
+      blockerNote = note;
+      eventKind = "block";
+      break;
+    case "done":
+      if (currentWork.owner_id === null) {
+        return {
+          ok: false,
+          error: `Work item #${workId} is unassigned. Take it before completing it.`,
+        };
+      }
+      if (currentWork.owner_id !== body.agent_id) {
+        return {
+          ok: false,
+          error: `Work item #${workId} is owned by ${currentWork.owner_id}. Only the current owner can mark it done.`,
+        };
+      }
+      nextStatus = "done";
+      blockerNote = null;
+      eventKind = "done";
+      break;
+    case "activate":
+      if (currentWork.owner_id === null) {
+        return {
+          ok: false,
+          error: `Work item #${workId} is unassigned. Take it before activating it.`,
+        };
+      }
+      if (currentWork.owner_id !== body.agent_id) {
+        return {
+          ok: false,
+          error: `Work item #${workId} is owned by ${currentWork.owner_id}. Only the current owner can reactivate it.`,
+        };
+      }
+      nextStatus = "active";
+      blockerNote = null;
+      eventKind = "status";
+      break;
+  }
+
+  updateWorkItem.run(nextOwnerId, nextStatus, blockerNote, now, workId);
+  const eventInsert = insertWorkEvent.run(
+    workId,
+    body.agent_id,
+    eventKind,
+    currentWork.owner_id,
+    nextOwnerId,
+    nextStatus,
+    note,
+    now
+  );
+
+  const updatedWork = toWorkItem(selectWorkRowById.get(workId) as WorkItemRow);
+  const eventId = normalizeCount(eventInsert.lastInsertRowid);
+  const updatedEvent = toWorkEvent(
+    (selectWorkEventRowsByWorkId.all(workId) as WorkEventRow[]).find(
+      (row) => row.id === eventId
+    ) as WorkEventRow
+  );
+
+  return {
+    ok: true,
+    work: updatedWork,
+    event: updatedEvent,
   };
 }
 
@@ -1303,6 +1768,14 @@ Bun.serve({
           );
         case "/message-history":
           return jsonResponse(handleMessageHistory(body as MessageHistoryRequest));
+        case "/handoff-work":
+          return jsonResponse(handleHandoffWork(body as HandoffWorkRequest));
+        case "/list-work":
+          return jsonResponse(handleListWork(body as ListWorkRequest));
+        case "/get-work":
+          return jsonResponse(handleGetWork(body as GetWorkRequest));
+        case "/update-work-status":
+          return jsonResponse(handleUpdateWorkStatus(body as UpdateWorkStatusRequest));
         case "/unregister":
           handleUnregister(body as UnregisterRequest);
           return jsonResponse({ ok: true });

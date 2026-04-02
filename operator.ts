@@ -30,14 +30,24 @@ import {
 } from "./shared/operator-agent-ref.ts";
 import { parseOperatorInput, type OperatorCommand } from "./shared/operator-command.ts";
 import { resolveRoomParticipantIds } from "./shared/operator-room.ts";
+import {
+  formatWorkDetailLines,
+  formatWorkListLine,
+} from "./shared/work-format.ts";
 import type {
   Agent,
+  GetWorkResponse,
+  HandoffWorkResponse,
+  ListWorkResponse,
   Message,
   MessageHistoryRequest,
   PollMessagesResponse,
   RemoveAgentAdminResponse,
   SendMessageResponse,
+  UpdateWorkStatusResponse,
   UnregisterRequest,
+  WorkItem,
+  WorkStatus,
 } from "./shared/types.ts";
 
 type OperatorRoom = { name: string; conversationId: string; participantIds: string[] };
@@ -141,6 +151,10 @@ function windowAround<T>(items: T[], selectedIndex: number, count: number): T[] 
 function helpLines(): string[] {
   return [
     "Slash commands: /help /leave /agents /rooms /reply /details [minimal|compact|verbose]",
+    "/handoff <agent> <summary> /handoff-work <agent> <summary>",
+    "/work [open|all|mine|assigned|active|blocked|done|<id>] /list-work ... /get-work <work-id>",
+    "/take <work-id> /block <work-id> <reason> /done <work-id> [note] /activate <work-id> [note]",
+    "/update-work-status <work-id> <take|block|done|activate> [note]",
     "/dm <agent> [message] /msg <agent> <message>",
     "/room create <name> <agent...|all> /room use <name-or-conversation-id>",
     "/participants /context /history [limit] /quit /exit",
@@ -236,6 +250,18 @@ function sortedAgents(state: State): Agent[] {
 
 function sortedRooms(state: State): OperatorRoom[] {
   return [...state.rooms.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function currentConversationId(state: State): string | null {
+  if (state.currentContext.kind === "room") {
+    return state.currentContext.conversationId;
+  }
+
+  if (state.currentContext.kind === "dm") {
+    return state.dmConversations.get(state.currentContext.agentId) ?? null;
+  }
+
+  return null;
 }
 
 function App(): ReactElement {
@@ -540,6 +566,131 @@ function App(): ReactElement {
     setNotice(`Loaded ${limit} message(s) for the current context.`);
   }, [loadCurrentHistory, setNotice]);
 
+  const showWorkList = useCallback(async (
+    filter: "open" | "all" | "mine" | "assigned" | "active" | "blocked" | "done"
+  ) => {
+    const current = stateRef.current;
+    const request: Record<string, unknown> = {
+      agent_id: current.myId,
+      auth_token: current.authToken,
+      limit: 50,
+    };
+
+    switch (filter) {
+      case "mine":
+        request.owner_id = current.myId;
+        break;
+      case "assigned":
+      case "active":
+      case "blocked":
+      case "done":
+        request.status = filter;
+        break;
+      case "all":
+        request.include_done = true;
+        break;
+      case "open":
+      default:
+        request.include_done = false;
+        break;
+    }
+
+    const result = await brokerPost<ListWorkResponse>("/list-work", request);
+    const lines =
+      result.work_items.length === 0
+        ? ["No work items found."]
+        : result.work_items.map((work) => `- ${formatWorkListLine(work, participantDisplay)}`);
+
+    showDetail(`Work (${filter})`, lines);
+  }, [brokerPost, participantDisplay, showDetail]);
+
+  const showWorkDetail = useCallback(async (workId: number) => {
+    const current = stateRef.current;
+    const result = await brokerPost<GetWorkResponse>("/get-work", {
+      agent_id: current.myId,
+      work_id: workId,
+      auth_token: current.authToken,
+    });
+
+    if (!result.work) {
+      throw new Error(`Work item #${workId} not found.`);
+    }
+
+    showDetail(
+      `Work #${workId}`,
+      formatWorkDetailLines(result.work, result.events, participantDisplay)
+    );
+  }, [brokerPost, participantDisplay, showDetail]);
+
+  const handoffWork = useCallback(async (selector: string, summary: string) => {
+    await refreshAgents();
+    const resolution = resolveAgentSelector(stateRef.current.agentRefs, selector);
+    if (!resolution.ok) {
+      throw new Error(resolution.error);
+    }
+
+    const current = stateRef.current;
+    const result = await brokerPost<HandoffWorkResponse>("/handoff-work", {
+      agent_id: current.myId,
+      to_id: resolution.record.agent.id,
+      summary,
+      conversation_id: currentConversationId(current),
+      notify_message: true,
+      auth_token: current.authToken,
+    });
+
+    if (!result.ok || !result.work) {
+      throw new Error(result.error ?? "Failed to create handoff.");
+    }
+
+    rememberDmConversation(resolution.record.agent.id, result.work.conversation_id);
+
+    const activeConversationId = currentConversationId(stateRef.current);
+    if (
+      stateRef.current.currentContext.kind === "dm" &&
+      stateRef.current.currentContext.agentId === resolution.record.agent.id
+    ) {
+      await loadCurrentHistory();
+    } else if (
+      stateRef.current.currentContext.kind === "room" &&
+      activeConversationId !== null &&
+      result.work.conversation_id === activeConversationId
+    ) {
+      await loadCurrentHistory();
+    } else {
+      await refreshAgents();
+    }
+
+    setNotice(
+      `Created handoff #${result.work.id} for ${participantDisplay(resolution.record.agent.id)}.`
+    );
+  }, [brokerPost, loadCurrentHistory, participantDisplay, refreshAgents, rememberDmConversation, setNotice]);
+
+  const updateWorkStatus = useCallback(async (
+    workId: number,
+    action: "take" | "block" | "done" | "activate",
+    note?: string
+  ) => {
+    const current = stateRef.current;
+    const result = await brokerPost<UpdateWorkStatusResponse>("/update-work-status", {
+      agent_id: current.myId,
+      work_id: workId,
+      action,
+      note,
+      auth_token: current.authToken,
+    });
+
+    if (!result.ok || !result.work) {
+      throw new Error(result.error ?? `Failed to ${action} work #${workId}.`);
+    }
+
+    setNotice(`Updated work #${result.work.id} to ${result.work.status}.`);
+
+    if (stateRef.current.detailPanel?.title === `Work #${workId}`) {
+      await showWorkDetail(workId);
+    }
+  }, [brokerPost, setNotice, showWorkDetail]);
+
   const fullRefresh = useCallback(async () => {
     if (stateRef.current.currentContext.kind === "none") await refreshAgents();
     else await loadCurrentHistory();
@@ -656,6 +807,13 @@ function App(): ReactElement {
       case "quit": await shutdown(0); return;
       case "leave": leaveContext(); return;
       case "reply": await switchReplyContext(); return;
+      case "handoff": await handoffWork(command.agentSelector, command.summary); return;
+      case "work-list": await showWorkList(command.filter); return;
+      case "work-open": await showWorkDetail(command.workId); return;
+      case "take": await updateWorkStatus(command.workId, "take"); return;
+      case "block": await updateWorkStatus(command.workId, "block", command.reason); return;
+      case "done": await updateWorkStatus(command.workId, "done", command.note); return;
+      case "activate": await updateWorkStatus(command.workId, "activate", command.note); return;
       case "details":
         updateState((prev) => ({ ...prev, threadMode: command.mode ?? (prev.threadMode === "minimal" ? "compact" : prev.threadMode === "compact" ? "verbose" : "minimal") }));
         return;
@@ -681,7 +839,7 @@ function App(): ReactElement {
         throw new Error(`Unhandled command: ${String(neverReached)}`);
       }
     }
-  }, [createRoom, leaveContext, refreshAgents, removeAgentFromBroker, sendInCurrentContext, setNotice, showContext, showHistory, showParticipants, showDetail, shutdown, switchDm, switchReplyContext, updateState, useRoom]);
+  }, [createRoom, handoffWork, leaveContext, refreshAgents, removeAgentFromBroker, sendInCurrentContext, setNotice, showContext, showHistory, showParticipants, showDetail, showWorkDetail, showWorkList, shutdown, switchDm, switchReplyContext, updateState, updateWorkStatus, useRoom]);
 
   const handleSubmit = useCallback(async (rawValue: string) => {
     const value = rawValue.trim();

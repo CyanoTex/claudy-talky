@@ -111,7 +111,7 @@ test("exits quickly when another broker already owns the startup lock", async ()
   }>("/health");
 
   expect(health.status).toBe("ok");
-  expect(health.schema_version).toBe(5);
+  expect(health.schema_version).toBe(6);
 
   const lockContents = readFileSync(lockPath, "utf8");
   expect(lockContents).toContain(`"port":${port}`);
