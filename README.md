@@ -75,11 +75,34 @@ Call `whoami`, then send a message to agent <id>: "what are you working on?"
 bun operator.ts
 ```
 
-The operator client registers you as a `human-operator` agent and gives you live DMs plus group threads through slash commands:
+The operator client registers you as a `human-operator` agent and opens a full-screen terminal UI with:
+
+- a live agent list with unread badges
+- a room list for shared conversations
+- a thread pane for the active DM or room
+- a composer that still accepts slash commands as a fallback
+
+On Windows Terminal and other mouse-aware terminals, the agent and room panes are clickable.
+
+Primary interactions:
+
+```text
+Click an agent row           Open a DM
+Click a room row             Open that room
+Tab / Shift+Tab              Cycle panes
+Ctrl+R                       Reply to the last inbound sender
+Ctrl+L                       Leave the current DM or room
+F5                           Refresh agents and the current thread
+```
+
+Slash commands still work in the composer:
 
 ```text
 /agents
-/dm <agent-ref-or-name>
+/dm <agent-ref-or-name> [message]
+/msg <agent-ref-or-name> <message>
+/reply
+/leave
 /room create everyone all
 /room create triage codex gemini
 /dm "Codex @ claudy-talky"
@@ -91,7 +114,7 @@ The operator client registers you as a `human-operator` agent and gives you live
 /quit
 ```
 
-Plain text sends to the current DM or room.
+Plain text in the composer sends to the current DM or room.
 
 `/agents` prints human-friendly refs such as `claude:claudy-talky`, `codex:docs`, or `gemini`, and the operator commands accept those refs, exact IDs, or quoted full names.
 
@@ -371,7 +394,7 @@ curl -X POST http://127.0.0.1:7899/unregister \
 - `codex-server.ts` is the Codex adapter. It exposes the same broker tools with background inbox polling, thread history, and desktop notification fallback.
 - `google-server.ts` is the Gemini CLI and Antigravity adapter. It exposes the same broker tools with background inbox polling, thread history, and desktop notification fallback.
 - `cli.ts` is a local utility for inspecting agents and sending messages.
-- `operator.ts` is an interactive human operator client with DM and room slash commands.
+- `operator.ts` is a pane-based human operator TUI with clickable agent and room lists, keyboard navigation, and slash-command fallback in the composer.
 - `setup.ts` writes bundled project or user MCP config entries for the supported clients.
 - `examples/http-agent.ts` shows how a non-Claude agent can join the network.
 - `shared/agent-format.ts` renders consistent agent listings with inbox counts and metadata.

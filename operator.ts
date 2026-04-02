@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
-import { createInterface } from "node:readline";
+import blessedModule from "neo-neo-blessed";
 import { basename } from "node:path";
-import { cwd, exit, stdin, stdout } from "node:process";
+import { cwd, exit } from "node:process";
 import {
   acknowledgeMessagesCompatible,
   brokerFetch,
@@ -31,6 +31,8 @@ import type {
   UnregisterRequest,
 } from "./shared/types.ts";
 
+const blessed = blessedModule as any;
+
 type OperatorRoom = {
   name: string;
   conversationId: string;
@@ -42,10 +44,14 @@ type OperatorContext =
   | { kind: "dm"; agentId: string }
   | { kind: "room"; conversationId: string };
 
+type FocusPane = "agents" | "rooms" | "thread" | "composer";
+type NoticeLevel = "info" | "warn" | "error";
+
 const BROKER_URL = `http://127.0.0.1:${getBrokerPort()}`;
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const POLL_INTERVAL_MS = 1_500;
 const ROOM_HISTORY_SCAN_LIMIT = 100;
+const DEFAULT_THREAD_HISTORY_LIMIT = 60;
 
 let myId = "";
 let authToken: string | undefined;
@@ -54,45 +60,356 @@ let agentRefRecords: AgentRefRecord[] = [];
 const roomsByConversationId = new Map<string, OperatorRoom>();
 const dmConversationByAgentId = new Map<string, string>();
 let currentContext: OperatorContext = { kind: "none" };
+let currentMessages: Message[] = [];
+let currentHistoryLimit = DEFAULT_THREAD_HISTORY_LIMIT;
 let lastIncomingSenderId: string | null = null;
+let lastNotice = "Ready.";
+let lastNoticeLevel: NoticeLevel = "info";
+let activePane: FocusPane = "agents";
+let selectedAgentIds: string[] = [];
+let selectedRoomConversationIds: string[] = [];
 let shuttingDown = false;
 let pollInFlight = false;
+let helpModalOpen = false;
+let modalReturnFocus: { focus: () => void } | null = null;
 
-const rl = createInterface({
-  input: stdin,
-  output: stdout,
-  terminal: true,
+const screen = blessed.screen({
+  smartCSR: true,
+  dockBorders: true,
+  fullUnicode: true,
+  autoPadding: false,
+  warnings: false,
+  title: "claudy-talky operator",
 });
+
+const titleBar = blessed.box({
+  parent: screen,
+  top: 0,
+  left: 0,
+  width: "100%",
+  height: 1,
+  tags: true,
+  style: {
+    fg: "white",
+    bg: "blue",
+  },
+});
+
+const noticeBar = blessed.box({
+  parent: screen,
+  top: 1,
+  left: 0,
+  width: "100%",
+  height: 1,
+  tags: true,
+  style: {
+    fg: "black",
+    bg: "cyan",
+  },
+});
+
+const actionBar = blessed.box({
+  parent: screen,
+  top: 2,
+  left: 0,
+  width: "100%",
+  height: 3,
+  border: "line",
+  label: " Actions ",
+  style: {
+    border: {
+      fg: "blue",
+    },
+  },
+});
+
+const actionHint = blessed.box({
+  parent: actionBar,
+  top: 1,
+  left: 1,
+  width: "100%-2",
+  height: 1,
+  tags: true,
+  style: {
+    fg: "white",
+  },
+});
+
+const leftPane = blessed.box({
+  parent: screen,
+  top: 5,
+  left: 0,
+  width: "30%",
+  bottom: 4,
+});
+
+const rightPane = blessed.box({
+  parent: screen,
+  top: 5,
+  left: "30%",
+  width: "70%",
+  bottom: 4,
+});
+
+const agentsList = blessed.list({
+  parent: leftPane,
+  label: " Agents ",
+  top: 0,
+  left: 0,
+  width: "100%",
+  height: "58%",
+  border: "line",
+  mouse: true,
+  keys: true,
+  vi: true,
+  items: ["(no agents online)"],
+  tags: false,
+  scrollbar: {
+    ch: " ",
+    track: {
+      bg: "gray",
+    },
+    style: {
+      inverse: true,
+    },
+  },
+  style: {
+    border: {
+      fg: "blue",
+    },
+    selected: {
+      bg: "cyan",
+      fg: "black",
+      bold: true,
+    },
+    item: {
+      hover: {
+        bg: "blue",
+      },
+    },
+  },
+});
+
+const roomsList = blessed.list({
+  parent: leftPane,
+  label: " Rooms ",
+  top: "58%",
+  left: 0,
+  width: "100%",
+  height: "42%",
+  border: "line",
+  mouse: true,
+  keys: true,
+  vi: true,
+  items: ["(no rooms yet)"],
+  tags: false,
+  scrollbar: {
+    ch: " ",
+    track: {
+      bg: "gray",
+    },
+    style: {
+      inverse: true,
+    },
+  },
+  style: {
+    border: {
+      fg: "blue",
+    },
+    selected: {
+      bg: "cyan",
+      fg: "black",
+      bold: true,
+    },
+    item: {
+      hover: {
+        bg: "blue",
+      },
+    },
+  },
+});
+
+const threadHeader = blessed.box({
+  parent: rightPane,
+  label: " Thread ",
+  top: 0,
+  left: 0,
+  width: "100%",
+  height: 4,
+  border: "line",
+  tags: true,
+  style: {
+    border: {
+      fg: "blue",
+    },
+  },
+});
+
+const threadBox = blessed.scrollablebox({
+  parent: rightPane,
+  top: 4,
+  left: 0,
+  width: "100%",
+  bottom: 0,
+  border: "line",
+  label: " Messages ",
+  scrollable: true,
+  alwaysScroll: true,
+  mouse: true,
+  keys: true,
+  vi: true,
+  tags: false,
+  scrollbar: {
+    ch: " ",
+    track: {
+      bg: "gray",
+    },
+    style: {
+      inverse: true,
+    },
+  },
+  style: {
+    border: {
+      fg: "blue",
+    },
+  },
+});
+
+const composer = blessed.textbox({
+  parent: screen,
+  bottom: 0,
+  left: 0,
+  width: "100%",
+  height: 4,
+  border: "line",
+  label: " Composer ",
+  inputOnFocus: true,
+  mouse: true,
+  keys: true,
+  style: {
+    border: {
+      fg: "green",
+    },
+    focus: {
+      border: {
+        fg: "yellow",
+      },
+    },
+  },
+});
+
+const modal = blessed.scrollablebox({
+  parent: screen,
+  hidden: true,
+  top: "center",
+  left: "center",
+  width: "78%",
+  height: "70%",
+  border: "line",
+  label: " Details ",
+  scrollable: true,
+  alwaysScroll: true,
+  mouse: true,
+  keys: true,
+  vi: true,
+  tags: false,
+  padding: {
+    left: 1,
+    right: 1,
+    top: 0,
+    bottom: 0,
+  },
+  scrollbar: {
+    ch: " ",
+    track: {
+      bg: "gray",
+    },
+    style: {
+      inverse: true,
+    },
+  },
+  style: {
+    fg: "white",
+    bg: "black",
+    border: {
+      fg: "yellow",
+    },
+  },
+});
+
+function createActionButton(
+  left: number,
+  content: string,
+  handler: () => void | Promise<void>
+) {
+  const button = blessed.button({
+    parent: actionBar,
+    top: 0,
+    left,
+    width: content.length + 4,
+    height: 1,
+    mouse: true,
+    shrink: true,
+    padding: {
+      left: 1,
+      right: 1,
+    },
+    content,
+    style: {
+      fg: "black",
+      bg: "white",
+      focus: {
+        fg: "white",
+        bg: "blue",
+      },
+      hover: {
+        fg: "white",
+        bg: "blue",
+      },
+    },
+  });
+
+  button.on("press", () => {
+    void Promise.resolve(handler()).catch((error) => {
+      showError(error instanceof Error ? error.message : String(error));
+    });
+  });
+
+  return button;
+}
+
+const dmButton = createActionButton(1, "DM selected", () => openSelectedAgent());
+const roomButton = createActionButton(16, "Open room", () => openSelectedRoom());
+const replyButton = createActionButton(28, "Reply", () => switchReplyContext());
+const leaveButton = createActionButton(37, "Leave", () => leaveContext());
+const refreshButton = createActionButton(46, "Refresh", () => fullRefresh());
+const helpButton = createActionButton(56, "Help", () => showHelp());
 
 function nowText(): string {
   return new Date().toISOString();
 }
 
-function promptLabel(): string {
-  if (currentContext.kind === "dm") {
-    return `dm:${participantRef(currentContext.agentId) ?? currentContext.agentId}> `;
-  }
-
-  if (currentContext.kind === "room") {
-    const room = roomsByConversationId.get(currentContext.conversationId);
-    return `room:${room?.name ?? currentContext.conversationId}> `;
-  }
-
-  return "operator> ";
+function roomConversationId(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const suffix = crypto.randomUUID().slice(0, 8);
+  return `room-${slug || "chat"}-${suffix}`;
 }
 
-function refreshPrompt(): void {
-  rl.setPrompt(promptLabel());
-  rl.prompt(true);
+function participantName(agentId: string): string {
+  return agentCache.get(agentId)?.name ?? agentId;
 }
 
-function printBlock(lines: string[]): void {
-  console.log(lines.join("\n"));
-  refreshPrompt();
+function participantRef(agentId: string): string | null {
+  return agentRefRecords.find((record) => record.agent.id === agentId)?.ref ?? null;
 }
 
-function printInfo(message: string): void {
-  printBlock([message]);
+function participantDisplay(agentId: string): string {
+  const ref = participantRef(agentId);
+  const name = participantName(agentId);
+  return ref ? `${ref} | ${name}` : name;
 }
 
 function compactAgent(agent: Agent): string {
@@ -124,29 +441,6 @@ function compactAgent(agent: Agent): string {
   return parts.join(" ");
 }
 
-function roomConversationId(name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const suffix = crypto.randomUUID().slice(0, 8);
-  return `room-${slug || "chat"}-${suffix}`;
-}
-
-function participantName(agentId: string): string {
-  return agentCache.get(agentId)?.name ?? agentId;
-}
-
-function participantRef(agentId: string): string | null {
-  return agentRefRecords.find((record) => record.agent.id === agentId)?.ref ?? null;
-}
-
-function participantDisplay(agentId: string): string {
-  const ref = participantRef(agentId);
-  const name = participantName(agentId);
-  return ref ? `${ref} | ${name}` : name;
-}
-
 function roomForConversation(conversationId: string): OperatorRoom | undefined {
   return roomsByConversationId.get(conversationId);
 }
@@ -171,26 +465,241 @@ function noteMessageConversation(message: Message): void {
   }
 }
 
-function formatMessageForHistory(message: Message): string {
+function formatMessageForThread(message: Message): string {
   const room = roomForConversation(message.conversation_id);
+  const header = `[${message.sent_at}] #${message.id} ${participantDisplay(message.from_id)} -> ${participantDisplay(message.to_id)}${
+    room ? ` [room:${room.name}]` : ""
+  }`;
   const lines = [
-    `[${message.sent_at}] #${message.id} ${participantDisplay(message.from_id)} -> ${participantDisplay(message.to_id)}${
-      room ? ` [room:${room.name}]` : ""
-    }`,
+    header,
     ...message.text.split(/\r?\n/).map((line) => `  ${line}`),
   ];
-
   appendMessageStateLines(lines, message);
   return lines.join("\n");
 }
 
-function formatIncomingMessage(message: Message): string {
-  const room = roomForConversation(message.conversation_id);
-  const header = room
-    ? `[${nowText()}] room:${room.name} ${participantDisplay(message.from_id)} -> you (#${message.id})`
-    : `[${nowText()}] ${participantDisplay(message.from_id)} -> you (#${message.id})`;
+function formatAgentListItem(agent: Agent): string {
+  const ref = participantRef(agent.id) ?? agent.id;
+  const unread =
+    agent.unread_count > 0
+      ? ` [${agent.unread_count}]`
+      : agent.surfaced_unseen_count > 0
+        ? ` [${agent.surfaced_unseen_count}*]`
+        : "";
+  return `${ref}${unread} ${agent.name}`;
+}
 
-  return [header, ...message.text.split(/\r?\n/).map((line) => `  ${line}`)].join("\n");
+function formatRoomListItem(room: OperatorRoom): string {
+  const active =
+    currentContext.kind === "room" &&
+    currentContext.conversationId === room.conversationId
+      ? "* "
+      : "";
+  return `${active}${room.name} (${room.participantIds.length})`;
+}
+
+function noticeColor(level: NoticeLevel): string {
+  switch (level) {
+    case "error":
+      return "red";
+    case "warn":
+      return "yellow";
+    default:
+      return "cyan";
+  }
+}
+
+function contextLabel(): string {
+  if (currentContext.kind === "dm") {
+    return `DM ${participantDisplay(currentContext.agentId)}`;
+  }
+
+  if (currentContext.kind === "room") {
+    const room = roomsByConversationId.get(currentContext.conversationId);
+    return `Room ${room?.name ?? currentContext.conversationId}`;
+  }
+
+  return "No active context";
+}
+
+function setNotice(message: string, level: NoticeLevel = "info"): void {
+  lastNotice = message;
+  lastNoticeLevel = level;
+}
+
+function showError(message: string): void {
+  setNotice(message, "error");
+  renderAll();
+}
+
+function focusElementForPane(pane: FocusPane): { focus: () => void } {
+  switch (pane) {
+    case "agents":
+      return agentsList;
+    case "rooms":
+      return roomsList;
+    case "thread":
+      return threadBox;
+    case "composer":
+      return composer;
+  }
+}
+
+function focusPane(pane: FocusPane): void {
+  activePane = pane;
+  focusElementForPane(pane).focus();
+  renderAll();
+}
+
+function cycleFocus(direction: 1 | -1): void {
+  const panes: FocusPane[] = ["agents", "rooms", "thread", "composer"];
+  const currentIndex = panes.indexOf(activePane);
+  const nextIndex = (currentIndex + direction + panes.length) % panes.length;
+  focusPane(panes[nextIndex]!);
+}
+
+function closeModal(): void {
+  if (!helpModalOpen) {
+    return;
+  }
+
+  helpModalOpen = false;
+  modal.hide();
+  (modalReturnFocus ?? focusElementForPane(activePane)).focus();
+  renderAll();
+}
+
+function showModal(title: string, content: string): void {
+  modal.setLabel(` ${title} `);
+  modal.setContent(`${content}\n\nEsc, Enter, or q to close`);
+  modal.scrollTo(0);
+  modalReturnFocus = focusElementForPane(activePane);
+  helpModalOpen = true;
+  modal.show();
+  modal.focus();
+  renderAll();
+}
+
+function renderTitleBar(): void {
+  const liveAgents = agentCache.size;
+  titleBar.setContent(
+    ` claudy-talky operator | you ${myId || "(registering)"} | ${contextLabel()} | ${liveAgents} agent(s) online `
+  );
+  noticeBar.style.bg = noticeColor(lastNoticeLevel);
+  noticeBar.style.fg = lastNoticeLevel === "warn" ? "black" : "white";
+  noticeBar.setContent(` ${lastNotice}`);
+  actionHint.setContent(
+    "Click an agent to DM, click a room to open it, type slash commands in the composer, and use Tab to cycle panes."
+  );
+}
+
+function renderAgents(): void {
+  const previousSelected = selectedAgentIds[agentsList.selected] ?? null;
+  const agents = [...agentCache.values()].sort((left, right) => {
+    const unreadDelta = right.unread_count - left.unread_count;
+    if (unreadDelta !== 0) {
+      return unreadDelta;
+    }
+
+    return left.name.localeCompare(right.name);
+  });
+
+  selectedAgentIds = agents.map((agent) => agent.id);
+  if (agents.length === 0) {
+    agentsList.setItems(["(no agents online)"]);
+    agentsList.select(0);
+    return;
+  }
+
+  agentsList.setItems(agents.map(formatAgentListItem));
+
+  const preferredId =
+    currentContext.kind === "dm"
+      ? currentContext.agentId
+      : previousSelected;
+  const preferredIndex = preferredId ? selectedAgentIds.indexOf(preferredId) : -1;
+  agentsList.select(preferredIndex >= 0 ? preferredIndex : 0);
+}
+
+function renderRooms(): void {
+  const previousSelected = selectedRoomConversationIds[roomsList.selected] ?? null;
+  const rooms = [...roomsByConversationId.values()].sort((left, right) =>
+    left.name.localeCompare(right.name)
+  );
+
+  selectedRoomConversationIds = rooms.map((room) => room.conversationId);
+  if (rooms.length === 0) {
+    roomsList.setItems(["(no rooms yet)"]);
+    roomsList.select(0);
+    return;
+  }
+
+  roomsList.setItems(rooms.map(formatRoomListItem));
+
+  const preferredConversationId =
+    currentContext.kind === "room"
+      ? currentContext.conversationId
+      : previousSelected;
+  const preferredIndex = preferredConversationId
+    ? selectedRoomConversationIds.indexOf(preferredConversationId)
+    : -1;
+  roomsList.select(preferredIndex >= 0 ? preferredIndex : 0);
+}
+
+function renderThread(): void {
+  if (currentContext.kind === "none") {
+    threadHeader.setContent(
+      "No active context.\n\nSelect an agent to open a DM, create a room with `/room create`, or use `/msg <agent> <text>`."
+    );
+    threadBox.setContent(
+      [
+        "Ready.",
+        "",
+        "Quick actions:",
+        "- Click an agent row or press Enter on one to open a DM",
+        "- Click a room row or press Enter to reopen it",
+        "- Use `/reply` to jump to the last inbound sender",
+        "- Use `/leave` to clear the current context",
+      ].join("\n")
+    );
+    threadBox.scrollTo(0);
+    return;
+  }
+
+  if (currentContext.kind === "dm") {
+    const agent = agentCache.get(currentContext.agentId);
+    const conversationId = dmConversationByAgentId.get(currentContext.agentId);
+    threadHeader.setContent(
+      `DM with ${participantDisplay(currentContext.agentId)}\nConversation: ${conversationId ?? "(new conversation on next send)"}\nSummary: ${agent?.summary ?? "(none)"}`
+    );
+  } else {
+    const room = roomsByConversationId.get(currentContext.conversationId);
+    threadHeader.setContent(
+      `Room ${room?.name ?? currentContext.conversationId}\nConversation: ${currentContext.conversationId}\nParticipants: ${room?.participantIds.map(participantDisplay).join(", ") ?? "(unknown)"}`
+    );
+  }
+
+  if (currentMessages.length === 0) {
+    threadBox.setContent("No messages in the current context.");
+    threadBox.scrollTo(0);
+    return;
+  }
+
+  threadBox.setContent(currentMessages.map(formatMessageForThread).join("\n\n"));
+  threadBox.setScrollPerc(100);
+}
+
+function renderComposer(): void {
+  composer.setLabel(` Composer | ${contextLabel()} `);
+}
+
+function renderAll(): void {
+  renderTitleBar();
+  renderAgents();
+  renderRooms();
+  renderThread();
+  renderComposer();
+  screen.render();
 }
 
 async function refreshAgents(): Promise<Agent[]> {
@@ -209,16 +718,16 @@ async function registerOperator(): Promise<void> {
   const response = await registerAgentCompatible(BROKER_URL, {
     name: `Human Operator @ ${workspaceName}`,
     kind: "human-operator",
-    transport: "cli-chat",
+    transport: "cli-tui",
     cwd: cwd(),
-    summary: "Interactive human operator session.",
-    capabilities: ["messaging", "message_history", "operator_console"],
+    summary: "Interactive human operator TUI session.",
+    capabilities: ["messaging", "message_history", "operator_console", "mouse_ui"],
     metadata: {
       client: "claudy-talky Operator",
       launcher: "bun",
       adapter: "claudy-talky",
       workspace_source: "process.cwd",
-      notification_styles: ["stdout"],
+      notification_styles: ["tui", "stdout"],
     },
   });
 
@@ -228,6 +737,45 @@ async function registerOperator(): Promise<void> {
 
 async function brokerPost<T>(path: string, body: unknown): Promise<T> {
   return brokerFetch<T>(BROKER_URL, path, body);
+}
+
+function currentContextRequest(limit: number): MessageHistoryRequest {
+  const request: MessageHistoryRequest = {
+    agent_id: myId,
+    limit,
+    mark_opened: true,
+    auth_token: authToken,
+  };
+
+  if (currentContext.kind === "dm") {
+    request.with_agent_id = currentContext.agentId;
+  } else if (currentContext.kind === "room") {
+    request.conversation_id = currentContext.conversationId;
+  }
+
+  return request;
+}
+
+async function loadCurrentHistory(limit = currentHistoryLimit): Promise<void> {
+  currentHistoryLimit = limit;
+
+  if (currentContext.kind === "none") {
+    currentMessages = [];
+    renderAll();
+    return;
+  }
+
+  const history = await messageHistoryCompatible(BROKER_URL, currentContextRequest(limit));
+  currentMessages = [...history.messages].reverse();
+  await refreshAgents();
+  renderAll();
+}
+
+async function fullRefresh(): Promise<void> {
+  await refreshAgents();
+  await loadCurrentHistory();
+  setNotice("Refreshed agents and current thread.");
+  renderAll();
 }
 
 async function sendDirectMessage(agentId: string, text: string): Promise<void> {
@@ -245,11 +793,14 @@ async function sendDirectMessage(agentId: string, text: string): Promise<void> {
   }
 
   rememberDmConversation(agentId, result.message.conversation_id);
+  setNotice(`Sent message #${result.message.id} to ${participantDisplay(agentId)}.`);
 
-  printBlock([
-    `[${result.message.sent_at}] you -> ${participantDisplay(agentId)} (#${result.message.id})`,
-    ...text.split(/\r?\n/).map((line) => `  ${line}`),
-  ]);
+  if (currentContext.kind === "dm" && currentContext.agentId === agentId) {
+    currentMessages.push(result.message);
+  }
+
+  await refreshAgents();
+  renderAll();
 }
 
 async function sendRoomMessage(room: OperatorRoom, text: string): Promise<void> {
@@ -274,14 +825,14 @@ async function sendRoomMessage(room: OperatorRoom, text: string): Promise<void> 
     )
   );
 
-  const sentIds: number[] = [];
+  const sentMessages: Message[] = [];
   const failures: string[] = [];
 
   for (let index = 0; index < settled.length; index += 1) {
     const outcome = settled[index];
     const targetId = targets[index];
     if (outcome?.status === "fulfilled" && outcome.value.ok && outcome.value.message) {
-      sentIds.push(outcome.value.message.id);
+      sentMessages.push(outcome.value.message);
       continue;
     }
 
@@ -290,29 +841,33 @@ async function sendRoomMessage(room: OperatorRoom, text: string): Promise<void> 
       continue;
     }
 
-    failures.push(`${targetId}: ${outcome?.reason instanceof Error ? outcome.reason.message : String(outcome?.reason)}`);
+    failures.push(
+      `${targetId}: ${outcome?.reason instanceof Error ? outcome.reason.message : String(outcome?.reason)}`
+    );
   }
 
-  const lines = [
-    `[${nowText()}] you -> room:${room.name} (${targets.length} participant(s))${
-      sentIds.length > 0 ? ` [messages ${sentIds.map((id) => `#${id}`).join(", ")}]` : ""
-    }`,
-    ...text.split(/\r?\n/).map((line) => `  ${line}`),
-  ];
-
-  if (skipped.length > 0) {
-    lines.push(`Skipped offline participants: ${skipped.map(participantDisplay).join(", ")}`);
+  if (currentContext.kind === "room" && currentContext.conversationId === room.conversationId) {
+    currentMessages.push(...sentMessages);
   }
+
   if (failures.length > 0) {
-    lines.push(`Send failures: ${failures.join(" | ")}`);
+    setNotice(
+      `Room send completed with ${failures.length} failure(s). ${skipped.length > 0 ? `${skipped.length} offline.` : ""}`.trim(),
+      "warn"
+    );
+  } else {
+    setNotice(
+      `Sent ${sentMessages.length} room message(s) to ${targets.length} participant(s).`
+    );
   }
 
-  printBlock(lines);
+  await refreshAgents();
+  renderAll();
 }
 
 async function sendInCurrentContext(text: string): Promise<void> {
   if (currentContext.kind === "none") {
-    throw new Error("No active context. Use /dm or /room create|use first.");
+    throw new Error("No active context. Select an agent or room first.");
   }
 
   if (currentContext.kind === "dm") {
@@ -328,27 +883,12 @@ async function sendInCurrentContext(text: string): Promise<void> {
   await sendRoomMessage(room, text);
 }
 
-async function showAgents(): Promise<void> {
-  const agents = await refreshAgents();
-  if (agents.length === 0) {
-    printInfo("No other agents connected.");
-    return;
-  }
-
-  const lines = ["Agents:"];
-  for (const agent of agents.sort((left, right) => left.name.localeCompare(right.name))) {
-    lines.push(`- ${compactAgent(agent)}`);
-  }
-  printBlock(lines);
-}
-
-async function switchDm(agentSelector: string): Promise<void> {
+async function switchDmById(agentId: string): Promise<void> {
   await refreshAgents();
-  const resolution = resolveAgentSelector(agentRefRecords, agentSelector);
-  if (!resolution.ok) {
-    throw new Error(resolution.error);
+  const target = agentCache.get(agentId);
+  if (!target) {
+    throw new Error(`Agent ${agentId} is no longer online.`);
   }
-  const target = resolution.record.agent;
 
   const history = await messageHistoryCompatible(BROKER_URL, {
     agent_id: myId,
@@ -362,7 +902,19 @@ async function switchDm(agentSelector: string): Promise<void> {
   }
 
   currentContext = { kind: "dm", agentId: target.id };
-  printInfo(`DM context: ${resolution.record.ref} | ${target.name} (${target.id})`);
+  setNotice(`Opened DM with ${participantDisplay(target.id)}.`);
+  await loadCurrentHistory(DEFAULT_THREAD_HISTORY_LIMIT);
+  focusPane("composer");
+}
+
+async function switchDm(agentSelector: string): Promise<void> {
+  await refreshAgents();
+  const resolution = resolveAgentSelector(agentRefRecords, agentSelector);
+  if (!resolution.ok) {
+    throw new Error(resolution.error);
+  }
+
+  await switchDmById(resolution.record.agent.id);
 }
 
 async function switchReplyContext(): Promise<void> {
@@ -370,7 +922,7 @@ async function switchReplyContext(): Promise<void> {
     throw new Error("No inbound sender to reply to yet.");
   }
 
-  await switchDm(lastIncomingSenderId);
+  await switchDmById(lastIncomingSenderId);
 }
 
 async function resolveRoomParticipants(selectors: string[]): Promise<string[]> {
@@ -397,7 +949,7 @@ async function resolveRoomParticipants(selectors: string[]): Promise<string[]> {
 async function createRoom(name: string, selectors: string[]): Promise<void> {
   const participantIds = await resolveRoomParticipants(selectors);
   if (participantIds.length === 0) {
-    throw new Error("Room needs at least one live participant");
+    throw new Error("Room needs at least one live participant.");
   }
 
   const room: OperatorRoom = {
@@ -408,12 +960,10 @@ async function createRoom(name: string, selectors: string[]): Promise<void> {
 
   roomsByConversationId.set(room.conversationId, room);
   currentContext = { kind: "room", conversationId: room.conversationId };
-
-  printBlock([
-    `Room created: ${room.name}`,
-    `Conversation: ${room.conversationId}`,
-    `Participants: ${room.participantIds.map(participantDisplay).join(", ")}`,
-  ]);
+  currentMessages = [];
+  setNotice(`Created room ${room.name} with ${room.participantIds.length} participant(s).`);
+  renderAll();
+  focusPane("composer");
 }
 
 async function loadRoomFromHistory(conversationId: string): Promise<OperatorRoom | null> {
@@ -430,9 +980,7 @@ async function loadRoomFromHistory(conversationId: string): Promise<OperatorRoom
   }
 
   const participantIds = Array.from(
-    new Set(
-      history.messages.flatMap((message) => [message.from_id, message.to_id])
-    )
+    new Set(history.messages.flatMap((message) => [message.from_id, message.to_id]))
   ).filter((agentId) => agentId !== myId);
 
   if (participantIds.length === 0) {
@@ -450,138 +998,123 @@ async function loadRoomFromHistory(conversationId: string): Promise<OperatorRoom
 }
 
 async function useRoom(roomRef: string): Promise<void> {
-  const directMatch = Array.from(roomsByConversationId.values()).find(
+  const directMatch = [...roomsByConversationId.values()].find(
     (room) => room.name === roomRef || room.conversationId === roomRef
   );
   const room = directMatch ?? (await loadRoomFromHistory(roomRef));
 
   if (!room) {
-    throw new Error(`Room ${roomRef} is not known in this session and has no visible history`);
+    throw new Error(`Room ${roomRef} is not known in this session and has no visible history.`);
   }
 
   currentContext = { kind: "room", conversationId: room.conversationId };
-  printInfo(`Room context: ${room.name} (${room.conversationId})`);
+  setNotice(`Opened room ${room.name}.`);
+  await loadCurrentHistory(DEFAULT_THREAD_HISTORY_LIMIT);
+  focusPane("composer");
 }
 
-function showRooms(): void {
-  const rooms = Array.from(roomsByConversationId.values()).sort((left, right) =>
-    left.name.localeCompare(right.name)
-  );
-  if (rooms.length === 0) {
-    printInfo("No rooms in this operator session.");
+function leaveContext(): void {
+  if (currentContext.kind === "none") {
+    setNotice("No active context.", "warn");
+    renderAll();
     return;
   }
 
-  const lines = ["Rooms:"];
-  for (const room of rooms) {
-    const active =
-      currentContext.kind === "room" &&
-      currentContext.conversationId === room.conversationId
-        ? "*"
-        : "-";
-    lines.push(
-      `${active} ${room.name} (${room.conversationId}) [${room.participantIds.length} participant(s)]`
-    );
-  }
-  printBlock(lines);
+  currentContext = { kind: "none" };
+  currentMessages = [];
+  setNotice("Context cleared.");
+  renderAll();
+  focusPane("agents");
 }
 
 function showParticipants(): void {
   if (currentContext.kind === "none") {
-    printInfo("No active context.");
+    showModal("Participants", "No active context.");
     return;
   }
 
   if (currentContext.kind === "dm") {
     const agent = agentCache.get(currentContext.agentId);
-    printBlock([
-      "Participants:",
-      `- you (${myId})`,
-      `- ${participantRef(currentContext.agentId) ?? currentContext.agentId} | ${agent?.name ?? currentContext.agentId} (${currentContext.agentId})`,
-    ]);
+    showModal(
+      "Participants",
+      [
+        "Participants:",
+        `- you (${myId})`,
+        `- ${participantRef(currentContext.agentId) ?? currentContext.agentId} | ${agent?.name ?? currentContext.agentId} (${currentContext.agentId})`,
+      ].join("\n")
+    );
     return;
   }
 
   const room = roomsByConversationId.get(currentContext.conversationId);
-  if (!room) {
-    printInfo("Current room context is not available.");
-    return;
-  }
-
   const lines = [
-    `Participants for room:${room.name}:`,
+    `Participants for room:${room?.name ?? currentContext.conversationId}:`,
     `- you (${myId})`,
   ];
-  for (const participantId of room.participantIds) {
+  for (const participantId of room?.participantIds ?? []) {
     lines.push(`- ${participantDisplay(participantId)} (${participantId})`);
   }
-  printBlock(lines);
+  showModal("Participants", lines.join("\n"));
 }
 
 function showContext(): void {
   if (currentContext.kind === "none") {
-    printInfo("No active context.");
+    showModal("Current Context", "No active context.");
     return;
   }
 
   if (currentContext.kind === "dm") {
     const conversationId = dmConversationByAgentId.get(currentContext.agentId);
-    printBlock([
-      "Current context:",
-      `Type: DM`,
-      `Agent: ${participantDisplay(currentContext.agentId)} (${currentContext.agentId})`,
-      `Conversation: ${conversationId ?? "(new conversation on next send)"}`,
-    ]);
+    showModal(
+      "Current Context",
+      [
+        "Type: DM",
+        `Agent: ${participantDisplay(currentContext.agentId)} (${currentContext.agentId})`,
+        `Conversation: ${conversationId ?? "(new conversation on next send)"}`,
+      ].join("\n")
+    );
     return;
   }
 
   const room = roomsByConversationId.get(currentContext.conversationId);
-  printBlock([
-    "Current context:",
-    `Type: room`,
-    `Name: ${room?.name ?? currentContext.conversationId}`,
-    `Conversation: ${currentContext.conversationId}`,
-    `Participants: ${room?.participantIds.map(participantDisplay).join(", ") ?? "(unknown)"}`,
-  ]);
+  showModal(
+    "Current Context",
+    [
+      "Type: room",
+      `Name: ${room?.name ?? currentContext.conversationId}`,
+      `Conversation: ${currentContext.conversationId}`,
+      `Participants: ${room?.participantIds.map(participantDisplay).join(", ") ?? "(unknown)"}`,
+    ].join("\n")
+  );
 }
 
-function leaveContext(): void {
-  if (currentContext.kind === "none") {
-    printInfo("No active context.");
-    return;
-  }
-
-  currentContext = { kind: "none" };
-  printInfo("Context cleared.");
+function showHelp(): void {
+  showModal("Help", operatorHelpText());
 }
 
 async function showHistory(limit: number): Promise<void> {
   if (currentContext.kind === "none") {
-    throw new Error("No active context. Use /dm or /room create|use first.");
+    throw new Error("No active context. Select an agent or room first.");
   }
 
-  const request: MessageHistoryRequest = {
-    agent_id: myId,
-    limit,
-    mark_opened: true,
-    auth_token: authToken,
-  };
+  await loadCurrentHistory(limit);
+  setNotice(`Loaded ${limit} message(s) for the current context.`);
+  renderAll();
+}
 
-  if (currentContext.kind === "dm") {
-    request.with_agent_id = currentContext.agentId;
-  } else {
-    request.conversation_id = currentContext.conversationId;
+function messageBelongsToCurrentContext(message: Message): boolean {
+  if (currentContext.kind === "none") {
+    return false;
   }
 
-  const history = await messageHistoryCompatible(BROKER_URL, request);
-  if (history.messages.length === 0) {
-    printInfo("No messages found for the current context.");
-    return;
+  if (currentContext.kind === "room") {
+    return message.conversation_id === currentContext.conversationId;
   }
 
-  const messages = [...history.messages].reverse();
-  console.log(messages.map(formatMessageForHistory).join("\n\n"));
-  refreshPrompt();
+  return (
+    (message.from_id === currentContext.agentId && message.to_id === myId) ||
+    (message.from_id === myId && message.to_id === currentContext.agentId)
+  );
 }
 
 async function pollInbox(): Promise<void> {
@@ -600,11 +1133,8 @@ async function pollInbox(): Promise<void> {
       return;
     }
 
-    await refreshAgents();
-
     for (const message of response.messages) {
       noteMessageConversation(message);
-      console.log(formatIncomingMessage(message));
     }
 
     await acknowledgeMessagesCompatible(BROKER_URL, {
@@ -612,13 +1142,24 @@ async function pollInbox(): Promise<void> {
       message_ids: response.messages.map((message) => message.id),
       auth_token: authToken,
     });
+
+    await refreshAgents();
+
+    const affectsCurrentContext = response.messages.some(messageBelongsToCurrentContext);
+    const newest = response.messages.at(-1);
+    if (newest) {
+      setNotice(`Inbound message from ${participantDisplay(newest.from_id)} (#${newest.id}).`);
+    }
+
+    if (affectsCurrentContext) {
+      await loadCurrentHistory();
+    } else {
+      renderAll();
+    }
   } catch (error) {
-    printInfo(
-      `Inbox poll failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    showError(`Inbox poll failed: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     pollInFlight = false;
-    refreshPrompt();
   }
 }
 
@@ -633,10 +1174,32 @@ async function heartbeat(): Promise<void> {
   });
 }
 
+async function openSelectedAgent(): Promise<void> {
+  const selectedId = selectedAgentIds[agentsList.selected];
+  if (!selectedId) {
+    setNotice("No live agent selected.", "warn");
+    renderAll();
+    return;
+  }
+
+  await switchDmById(selectedId);
+}
+
+async function openSelectedRoom(): Promise<void> {
+  const selectedConversationId = selectedRoomConversationIds[roomsList.selected];
+  if (!selectedConversationId) {
+    setNotice("No room selected.", "warn");
+    renderAll();
+    return;
+  }
+
+  await useRoom(selectedConversationId);
+}
+
 async function runCommand(command: OperatorCommand): Promise<void> {
   switch (command.kind) {
     case "help":
-      printInfo(operatorHelpText());
+      showHelp();
       return;
     case "quit":
       await shutdown(0);
@@ -648,10 +1211,15 @@ async function runCommand(command: OperatorCommand): Promise<void> {
       await switchReplyContext();
       return;
     case "agents":
-      await showAgents();
+      await refreshAgents();
+      setNotice("Agents refreshed.");
+      renderAll();
+      focusPane("agents");
       return;
     case "rooms":
-      showRooms();
+      setNotice("Rooms pane focused.");
+      renderAll();
+      focusPane("rooms");
       return;
     case "participants":
       showParticipants();
@@ -678,7 +1246,8 @@ async function runCommand(command: OperatorCommand): Promise<void> {
       await sendInCurrentContext(command.text);
       return;
     case "error":
-      printInfo(command.message);
+      setNotice(command.message, "error");
+      renderAll();
       return;
     default: {
       const neverReached: never = command;
@@ -687,13 +1256,27 @@ async function runCommand(command: OperatorCommand): Promise<void> {
   }
 }
 
+async function handleComposerSubmit(rawValue: string): Promise<void> {
+  const value = rawValue.trim();
+  composer.clearValue();
+
+  if (!value) {
+    setNotice("Composer cleared.", "warn");
+    renderAll();
+    focusPane("composer");
+    return;
+  }
+
+  await runCommand(parseOperatorInput(value));
+  focusPane("composer");
+}
+
 async function shutdown(code: number): Promise<never> {
   if (shuttingDown) {
     exit(code);
   }
 
   shuttingDown = true;
-  rl.close();
 
   if (myId) {
     try {
@@ -706,24 +1289,159 @@ async function shutdown(code: number): Promise<never> {
     }
   }
 
+  screen.destroy();
   exit(code);
+}
+
+function wireFocusTracking(): void {
+  agentsList.on("focus", () => {
+    activePane = "agents";
+    renderAll();
+  });
+  roomsList.on("focus", () => {
+    activePane = "rooms";
+    renderAll();
+  });
+  threadBox.on("focus", () => {
+    activePane = "thread";
+    renderAll();
+  });
+  composer.on("focus", () => {
+    activePane = "composer";
+    renderAll();
+  });
+}
+
+function wireKeyboardShortcuts(): void {
+  screen.key(["C-c"], () => {
+    void shutdown(0);
+  });
+
+  screen.key(["tab"], () => {
+    if (helpModalOpen) {
+      return;
+    }
+
+    cycleFocus(1);
+  });
+
+  screen.key(["S-tab"], () => {
+    if (helpModalOpen) {
+      return;
+    }
+
+    cycleFocus(-1);
+  });
+
+  screen.key(["/"], () => {
+    if (helpModalOpen) {
+      return;
+    }
+
+    composer.setValue("/");
+    focusPane("composer");
+  });
+
+  screen.key(["C-r"], () => {
+    if (helpModalOpen) {
+      return;
+    }
+
+    void switchReplyContext().catch((error) => {
+      showError(error instanceof Error ? error.message : String(error));
+    });
+  });
+
+  screen.key(["C-l"], () => {
+    if (helpModalOpen) {
+      closeModal();
+      return;
+    }
+
+    leaveContext();
+  });
+
+  screen.key(["f5"], () => {
+    if (helpModalOpen) {
+      return;
+    }
+
+    void fullRefresh().catch((error) => {
+      showError(error instanceof Error ? error.message : String(error));
+    });
+  });
+
+  screen.key(["a"], () => {
+    if (helpModalOpen || screen.focused === composer) {
+      return;
+    }
+    focusPane("agents");
+  });
+
+  screen.key(["r"], () => {
+    if (helpModalOpen || screen.focused === composer) {
+      return;
+    }
+    focusPane("rooms");
+  });
+
+  screen.key(["m"], () => {
+    if (helpModalOpen) {
+      return;
+    }
+    focusPane("composer");
+  });
+
+  screen.key(["h"], () => {
+    if (helpModalOpen || screen.focused === composer) {
+      return;
+    }
+    showHelp();
+  });
+
+  composer.key("escape", () => {
+    composer.clearValue();
+    focusPane("agents");
+  });
+
+  modal.key(["escape", "enter", "q"], () => {
+    closeModal();
+  });
+}
+
+function wireInteractions(): void {
+  agentsList.on("select", () => {
+    void openSelectedAgent().catch((error) => {
+      showError(error instanceof Error ? error.message : String(error));
+    });
+  });
+
+  roomsList.on("select", () => {
+    void openSelectedRoom().catch((error) => {
+      showError(error instanceof Error ? error.message : String(error));
+    });
+  });
+
+  composer.on("submit", (value: unknown) => {
+    void handleComposerSubmit(String(value)).catch((error) => {
+      showError(error instanceof Error ? error.message : String(error));
+      focusPane("composer");
+    });
+  });
 }
 
 async function main(): Promise<void> {
   await registerOperator();
   await refreshAgents();
 
-  printBlock([
-    `Connected to ${BROKER_URL} as ${myId}.`,
-    "Use /agents to inspect live refs, /dm <ref-or-name> to chat one-to-one, and /room create <name> all to open a group thread.",
-    operatorHelpText(),
-  ]);
+  setNotice(`Connected to ${BROKER_URL} as ${myId}.`);
+  wireFocusTracking();
+  wireKeyboardShortcuts();
+  wireInteractions();
 
   const heartbeatTimer = setInterval(() => {
     void heartbeat().catch((error) => {
-      printInfo(
-        `Heartbeat failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(`Heartbeat failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   }, HEARTBEAT_INTERVAL_MS);
 
@@ -732,28 +1450,38 @@ async function main(): Promise<void> {
   }, POLL_INTERVAL_MS);
 
   process.on("SIGINT", () => {
+    clearInterval(heartbeatTimer);
+    clearInterval(pollTimer);
     void shutdown(0);
   });
 
   process.on("SIGTERM", () => {
+    clearInterval(heartbeatTimer);
+    clearInterval(pollTimer);
     void shutdown(0);
   });
 
-  rl.on("line", (line) => {
-    void runCommand(parseOperatorInput(line)).catch((error) => {
-      printInfo(`Error: ${error instanceof Error ? error.message : String(error)}`);
-    });
+  dmButton.on("focus", () => {
+    activePane = "agents";
+  });
+  roomButton.on("focus", () => {
+    activePane = "rooms";
+  });
+  replyButton.on("focus", () => {
+    activePane = "thread";
+  });
+  leaveButton.on("focus", () => {
+    activePane = "thread";
+  });
+  refreshButton.on("focus", () => {
+    activePane = "thread";
+  });
+  helpButton.on("focus", () => {
+    activePane = "thread";
   });
 
-  rl.on("close", () => {
-    clearInterval(heartbeatTimer);
-    clearInterval(pollTimer);
-    if (!shuttingDown) {
-      void shutdown(0);
-    }
-  });
-
-  refreshPrompt();
+  renderAll();
+  focusPane("agents");
 }
 
 try {
