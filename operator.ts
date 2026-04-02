@@ -887,6 +887,19 @@ function renderComposer(): void {
   composerCursor.show();
 }
 
+function syncNativeCursorPosition(): void {
+  if (!isComposerFocused() || composerCursor.hidden) {
+    return;
+  }
+
+  const coords = composerCursor._getCoords?.();
+  if (!coords || typeof coords.xi !== "number" || typeof coords.yi !== "number") {
+    return;
+  }
+
+  screen.program.cup(coords.yi, coords.xi);
+}
+
 function renderAll(): void {
   renderActions();
   renderPaneChrome();
@@ -897,6 +910,7 @@ function renderAll(): void {
   renderComposer();
   originalHideCursor();
   screen.render();
+  syncNativeCursorPosition();
 }
 
 function moveSelectedAction(direction: 1 | -1): void {
