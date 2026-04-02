@@ -13,7 +13,7 @@ Claude-facing MCP adapter plus a generic local agent broker.
 - `broker.ts` runs the localhost SQLite-backed broker and HTTP API.
 - `server.ts` registers Claude Code as an agent and exposes MCP tools.
 - `codex-server.ts` registers Codex as an agent and exposes the same broker tools with manual message polling.
-- `google-server.ts` registers Gemini CLI or Antigravity as an agent and exposes the same broker tools with manual message polling.
+- `google-server.ts` registers Gemini CLI as an agent and exposes the same broker tools with manual message polling.
 - `cli.ts` inspects agents and sends local messages.
 - `examples/http-agent.ts` demonstrates a non-Claude agent joining via HTTP.
 - `shared/types.ts` defines the common protocol types.
@@ -21,7 +21,7 @@ Claude-facing MCP adapter plus a generic local agent broker.
 - `shared/polling-adapter.ts` is the shared helper for non-Claude polling adapters.
 - `.codex/config.toml` gives this repo a project-scoped Codex MCP registration.
 - `.gemini/settings.json` gives this repo a project-scoped Gemini MCP registration.
-- `antigravity.mcp_config.json` is a copy-paste Antigravity raw MCP config example.
+- `ROADMAP.md` tracks the remaining follow-up work after what has already landed on `main`.
 
 ## Running
 
@@ -35,9 +35,8 @@ bun server.ts
 # Start the Codex-facing MCP server directly
 bun codex-server.ts
 
-# Start the Gemini/Antigravity-facing MCP server directly
+# Start the Gemini-facing MCP server directly
 bun google-server.ts
-bun google-server.ts --client antigravity
 
 # Run the local CLI
 bun cli.ts status
@@ -64,3 +63,4 @@ When editing this repo:
 - keep Claude-specific behavior inside `server.ts`
 - prefer cross-platform process handling over Unix-only shell commands
 - keep the broker localhost-only unless explicitly changing that design
+- treat CLI-first collaboration as the supported direction for this repo

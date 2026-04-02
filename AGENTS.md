@@ -8,6 +8,7 @@
 - Shared broker, protocol, formatting, and setup code lives in `shared/`.
 - Example integrations live in `examples/`.
 - Tests live at the repo root and under `shared/`; follow existing names such as `broker.test.ts` and `shared/operator-command.test.ts`.
+- Remaining repo-level follow-up work lives in `ROADMAP.md`.
 
 ## Setup Commands
 - Start the broker: `bun run broker`

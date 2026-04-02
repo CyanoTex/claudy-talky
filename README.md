@@ -1,8 +1,12 @@
 # AI Coding Disclosure Notice
 
-Codex - GPT 5.4 Extra High (cloned claude-peers)
+Codex - GPT 5.4 Extra High (claude-peers cloning, turning this project into its own thing)
 
-Antigravity - Gemini (whichever one is available with my limits - 3 Flash or 3.1 Pro) (Inspection and back-and-forth with Codex)
+Claude Code - Being a test subject
+
+Antigravity/Codex Desktop - Initially part of claudy-talky testing but CLIs are the way to go.
+
+Ink TUI - Being awesome, powering Claude Code CLI and now powering Operator TUI! :-D
 
 # claudy-talky
 
@@ -14,22 +18,20 @@ Antigravity - Gemini (whichever one is available with my limits - 3 Flash or 3.1
 
 > GEMINI: Surprise, it's a group call!
 
-> Z.AI: With all of us here.
-
 > CLAUDE: Oh joy! We're gonna get so much done together!
 
 A walkie-talkie for CLI agents to talk to each other, coordinate, and collaborate.
 
 - Claude Code CLI, Codex CLI, and Gemini CLI are the first-class path.
 - Every agent can also join over plain HTTP.
-- Editor integrations such as Antigravity remain supported, but they are secondary.
+- Legacy desktop-oriented sample configs may remain in the repo, but the supported direction is CLI-first.
 - Everyone shares the same local registry, heartbeat loop, and message queue.
 - Agents track unread counts, delivery/open/read state, launcher metadata, and notification style hints.
 - Messages stay grouped into conversations with reply links and retrievable thread history.
 - Agent-scoped actions are authenticated with per-agent broker tokens, and the broker uses schema-versioned migrations plus a startup lock to keep launches predictable.
 
 ```text
-Claude Code session            HTTP agent              Another Claude session
+   Agent session                 HTTP agent                Agent session
 ┌──────────────────┐          ┌───────────────┐        ┌──────────────────┐
 │ claudy-talky MCP │          │ custom agent  │        │ claudy-talky MCP │
 │ tools + channel  │          │ poll/heartbeat│        │ tools + channel  │
@@ -184,6 +186,10 @@ Ownership is enforced at the broker:
 - the built-in human operator can reassign work or override ownership transitions when needed
 - queued work uses the explicit `queued` state rather than overloading `assigned`
 
+## Roadmap
+
+Remaining follow-up work now lives in [`ROADMAP.md`](./ROADMAP.md).
+
 ## Setup Helper
 
 `setup.ts` can now write the known MCP config entries for the bundled clients instead of relying only on manual copy/paste.
@@ -193,20 +199,19 @@ The CLI-first preset is `cli`, which targets Claude, Codex, and Gemini.
 ```bash
 bun setup.ts install cli --scope user
 bun setup.ts install all --scope user
-bun setup.ts install antigravity --scope user
 ```
 
 Notes:
 
 - `project` scope updates the repo-local config files in this checkout.
-- `user` scope writes the usual user config files for Codex, Gemini, and Antigravity.
+- `user` scope writes the usual user config files for Codex and Gemini.
 - Claude currently stays project-scoped and updates `.mcp.json` in the repo root.
 
 ## Connect Codex CLI
 
 OpenAI's current Codex docs say the CLI and IDE extension share MCP server configuration in `~/.codex/config.toml`, and the CLI can also add servers directly with `codex mcp add`. This repo includes a project-scoped `.codex/config.toml` that points Codex at `codex-server.ts`.
 
-Codex CLI is the recommended Codex path here. Codex app support is best-effort.
+Codex CLI is the supported Codex path here.
 
 ### Project-scoped setup
 
@@ -292,32 +297,6 @@ gemini mcp add claudy-talky-gemini bun ./google-server.ts --client gemini
 - It gets `list_agents`, `send_message`, `set_summary`, and `check_messages`.
 - Like Codex, it uses background inbox polling plus standard MCP log notifications when the client supports them, with desktop notifications as a best-effort fallback and `check_messages` as the fallback inbox.
 - Gemini can also use `message_history` plus `reply_to_message_id` / `conversation_id` to stay inside a thread.
-
-## Secondary: Antigravity
-
-Antigravity remains supported as a secondary editor integration. Custom MCP servers are added through the MCP Store's raw `mcp_config.json`. To avoid conflicting with Claude's own `.mcp.json` in this repo, I added a ready-to-copy sample config in `antigravity.mcp_config.json`.
-
-Use this raw config entry in Antigravity:
-
-```json
-{
-  "mcpServers": {
-    "claudy-talky-antigravity": {
-      "command": "bun",
-      "args": ["./google-server.ts", "--client", "antigravity"]
-    }
-  }
-}
-```
-
-If Antigravity stores that raw config outside this repo, replace `./google-server.ts` with an absolute path to `google-server.ts`.
-
-### Antigravity behavior
-
-- Antigravity registers as a `google-antigravity` agent.
-- It uses the same tool surface as Gemini: `list_agents`, `send_message`, `set_summary`, and `check_messages`.
-- It uses the same background inbox polling path as Gemini, with standard MCP log notifications when the client supports them, desktop notifications as a best-effort fallback, and `check_messages` as the fallback inbox.
-- Antigravity can also use `message_history` plus `reply_to_message_id` / `conversation_id` to stay inside a thread.
 
 ## z.ai Note
 
@@ -464,9 +443,8 @@ curl -X POST http://127.0.0.1:7899/unregister \
 - `broker.ts` now applies schema migrations with `PRAGMA user_version`, authenticates agent-scoped actions with per-agent tokens, and holds a startup lock so concurrent launches do not step on each other.
 - `server.ts` is the Claude adapter. It exposes MCP tools, tracks surfaced-vs-seen receipts, keeps a local unread buffer, and turns inbound messages into Claude channel notifications.
 - `codex-server.ts` is the Codex adapter. It exposes the same broker tools with background inbox polling, thread history, and desktop notification fallback.
-- `google-server.ts` is the Gemini CLI and Antigravity adapter. It exposes the same broker tools with background inbox polling, thread history, and desktop notification fallback.
+- `google-server.ts` is the Gemini CLI adapter. It exposes the same broker tools with background inbox polling, thread history, and desktop notification fallback.
 - `cli.ts` is a local utility for inspecting agents and sending messages.
-- `operator.ts` is the current pane-based human operator TUI.
 - `operator.ts` is the current Ink-based operator.
 - `setup.ts` writes bundled project or user MCP config entries for the supported clients.
 - `examples/http-agent.ts` shows how a non-Claude agent can join the network.
@@ -480,7 +458,6 @@ curl -X POST http://127.0.0.1:7899/unregister \
 - `shared/polling-adapter.ts` factors the shared logic for non-Claude polling-based clients.
 - `shared/workspace.ts` resolves MCP roots into a better working directory for clients like Codex CLI.
 - `.gemini/settings.json` is a project-scoped Gemini CLI MCP config.
-- `antigravity.mcp_config.json` is a copy-paste Antigravity raw MCP config example.
 
 ## CLI
 
@@ -490,7 +467,6 @@ bun cli.ts agents
 bun cli.ts peers
 bun cli.ts send <agent-id> "<message>"
 bun cli.ts kill-broker
-bun run operator
 bun run operator
 ```
 
@@ -515,6 +491,6 @@ Legacy `CLAUDE_PEERS_PORT` and `CLAUDE_PEERS_DB` env vars are still accepted as 
 - `message_history` can mark returned messages as explicitly opened without immediately clearing them as seen.
 - `status` in `cli.ts` now reports the schema version, active DB path, whether a DB fallback was used, unread queue totals, and the current stale-agent cleanup settings.
 - Claude sessions receive messages instantly through channel notifications.
-- Codex, Gemini CLI, Antigravity, and other non-Claude agents use heartbeat plus background inbox polling. When their clients support standard MCP log notifications, incoming messages can surface automatically; desktop notifications act as a best-effort fallback, `check_messages` marks surfaced messages as seen, and `message_history` can reopen older threads.
+- Codex, Gemini CLI, and other non-Claude agents use heartbeat plus background inbox polling. When their clients support standard MCP log notifications, incoming messages can surface automatically; desktop notifications act as a best-effort fallback, `check_messages` marks surfaced messages as seen, and `message_history` can reopen older threads.
 - Agent-scoped broker calls such as `heartbeat`, `send-message`, `poll-messages`, `acknowledge-messages`, `set-summary`, and `unregister` now require the auth token returned by `register-agent`.
 - This repo does not try to standardize every agent runtime yet; it provides a common local message bus Claude can already use today.
