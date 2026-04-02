@@ -31,6 +31,13 @@ import {
 import { parseOperatorInput, type OperatorCommand } from "./shared/operator-command.ts";
 import { resolveRoomParticipantIds } from "./shared/operator-room.ts";
 import {
+  addPendingUnreadEntries,
+  clearPendingUnreadForAgent,
+  clearPendingUnreadForConversation,
+  countPendingUnreadByAgent,
+  type PendingUnreadEntry,
+} from "./shared/operator-unread.ts";
+import {
   formatWorkDetailLines,
   formatWorkListLine,
 } from "./shared/work-format.ts";
@@ -62,6 +69,7 @@ type State = {
   authToken?: string;
   agentCache: Map<string, Agent>;
   agentRefs: AgentRefRecord[];
+  pendingUnread: Map<number, PendingUnreadEntry>;
   rooms: Map<string, OperatorRoom>;
   dmConversations: Map<string, string>;
   currentContext: OperatorContext;
@@ -93,6 +101,7 @@ const initialState: State = {
   authToken: undefined,
   agentCache: new Map(),
   agentRefs: [],
+  pendingUnread: new Map(),
   rooms: new Map(),
   dmConversations: new Map(),
   currentContext: { kind: "none" },
@@ -245,8 +254,9 @@ function Panel(props: {
 }
 
 function sortedAgents(state: State): Agent[] {
+  const unreadCounts = countPendingUnreadByAgent(state.pendingUnread);
   return [...state.agentCache.values()].sort((left, right) => {
-    const unreadDelta = right.unread_count - left.unread_count;
+    const unreadDelta = (unreadCounts.get(right.id) ?? 0) - (unreadCounts.get(left.id) ?? 0);
     if (unreadDelta !== 0) return unreadDelta;
     return left.name.localeCompare(right.name);
   });
@@ -341,12 +351,23 @@ function App(): ReactElement {
       updateState((prev) => ({ ...prev, currentMessages: [], currentLimit: limit, detailPanel: null, threadScrollOffset: 0 }));
       return;
     }
+    const context = current.currentContext;
     const request: MessageHistoryRequest = { agent_id: current.myId, limit, mark_opened: true, auth_token: current.authToken };
-    if (current.currentContext.kind === "dm") request.with_agent_id = current.currentContext.agentId;
-    else request.conversation_id = current.currentContext.conversationId;
+    if (context.kind === "dm") request.with_agent_id = context.agentId;
+    else request.conversation_id = context.conversationId;
     const history = await messageHistoryCompatible(BROKER_URL, request);
     await refreshAgents();
-    updateState((prev) => ({ ...prev, currentMessages: sortMessages(history.messages), currentLimit: limit, detailPanel: null, threadScrollOffset: 0 }));
+    updateState((prev) => ({
+      ...prev,
+      pendingUnread:
+        context.kind === "dm"
+          ? clearPendingUnreadForAgent(prev.pendingUnread, context.agentId)
+          : clearPendingUnreadForConversation(prev.pendingUnread, context.conversationId),
+      currentMessages: sortMessages(history.messages),
+      currentLimit: limit,
+      detailPanel: null,
+      threadScrollOffset: 0,
+    }));
   }, [refreshAgents, updateState]);
 
   const showDetail = useCallback((title: string, lines: string[]) => {
@@ -426,6 +447,7 @@ function App(): ReactElement {
     rememberDmConversation(target.id, history.messages[0]?.conversation_id);
     updateState((prev) => ({
       ...prev,
+      pendingUnread: clearPendingUnreadForAgent(prev.pendingUnread, target.id),
       currentContext: { kind: "dm", agentId: target.id },
       selectedAgentId: target.id,
       activePane: "composer",
@@ -837,6 +859,7 @@ function App(): ReactElement {
         ...prev,
         agentCache: nextAgentCache,
         agentRefs: nextAgentRefs,
+        pendingUnread: clearPendingUnreadForAgent(prev.pendingUnread, agentId),
         rooms: nextRooms,
         dmConversations: nextDmConversations,
         selectedAgentId:
@@ -971,11 +994,23 @@ function App(): ReactElement {
     try {
       const response = await brokerPost<PollMessagesResponse>("/poll-messages", { id: current.myId, auth_token: current.authToken });
       if (response.messages.length === 0) return;
+      const pendingUnread: PendingUnreadEntry[] = [];
       for (const message of response.messages) {
         if (message.from_id === stateRef.current.myId && message.to_id !== stateRef.current.myId) rememberDmConversation(message.to_id, message.conversation_id);
         if (message.to_id === stateRef.current.myId && message.from_id !== stateRef.current.myId) {
           updateState((prev) => ({ ...prev, lastIncomingSenderId: message.from_id }));
           rememberDmConversation(message.from_id, message.conversation_id);
+          const currentContext = stateRef.current.currentContext;
+          const isCurrentDm = currentContext.kind === "dm" && currentContext.agentId === message.from_id;
+          const isCurrentRoom = currentContext.kind === "room" && currentContext.conversationId === message.conversation_id;
+          const isKnownRoomMessage = stateRef.current.rooms.has(message.conversation_id);
+          if (!isCurrentDm && !isCurrentRoom && !isKnownRoomMessage) {
+            pendingUnread.push({
+              messageId: message.id,
+              fromId: message.from_id,
+              conversationId: message.conversation_id,
+            });
+          }
         }
       }
       const ctx = stateRef.current.currentContext;
@@ -989,6 +1024,12 @@ function App(): ReactElement {
             : false;
       const newest = response.messages.at(-1);
       if (newest) setNotice(`Inbound message from ${participantDisplay(newest.from_id)} (#${newest.id}).`);
+      if (pendingUnread.length > 0) {
+        updateState((prev) => ({
+          ...prev,
+          pendingUnread: addPendingUnreadEntries(prev.pendingUnread, pendingUnread),
+        }));
+      }
       if (affectsCurrent) await loadCurrentHistory();
       else await refreshAgents();
       await acknowledgeMessagesCompatible(BROKER_URL, {
@@ -1116,6 +1157,7 @@ function App(): ReactElement {
   }, [size]);
 
   const agentRows = useMemo(() => {
+    const unreadCounts = countPendingUnreadByAgent(state.pendingUnread);
     const rows = sortedAgents(state);
     const index = Math.max(0, rows.findIndex((row) => row.id === state.selectedAgentId));
     const visibleRows: { id: string; text: string; selected: boolean }[] =
@@ -1124,7 +1166,7 @@ function App(): ReactElement {
         : windowAround(
             rows.map((agent) => ({
               id: agent.id,
-              text: `${participantRef(agent.id) ?? agent.id}${agent.unread_count > 0 ? ` [${agent.unread_count}]` : ""} ${agent.name}`,
+              text: `${participantRef(agent.id) ?? agent.id}${(unreadCounts.get(agent.id) ?? 0) > 0 ? ` [${unreadCounts.get(agent.id) ?? 0}]` : ""} ${agent.name}`,
               selected: agent.id === state.selectedAgentId,
             })),
             index,
