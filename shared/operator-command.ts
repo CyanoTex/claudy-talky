@@ -3,6 +3,7 @@ export type OperatorCommand =
   | { kind: "quit" }
   | { kind: "leave" }
   | { kind: "reply" }
+  | { kind: "tasks" }
   | { kind: "handoff"; agentSelector: string; summary: string }
   | { kind: "queue"; summary: string }
   | { kind: "assign"; workId: number; agentSelector: string; note?: string }
@@ -114,6 +115,8 @@ export function parseOperatorInput(line: string): OperatorCommand {
       return { kind: "leave" };
     case "reply":
       return { kind: "reply" };
+    case "tasks":
+      return { kind: "tasks" };
     case "handoff":
     case "handoff-work":
       return subcommand && rest.length > 0
@@ -299,6 +302,7 @@ return `Slash commands:
 /help
 /leave
 /agents
+/tasks
 /queue <summary>
 /queue-work <summary>
 /handoff <agent-ref-or-name> <summary>

@@ -113,6 +113,7 @@ Slash commands still work in the composer:
 
 ```text
 /agents
+/tasks
 /details [minimal|compact|verbose]
 /dm <agent-ref-or-name> [message]
 /msg <agent-ref-or-name> <message>
@@ -153,6 +154,7 @@ Plain text in the composer sends to the current DM or room.
 
 The operator and CLI adapters support a lightweight broker-backed work layer on top of normal threads:
 
+- `/tasks`
 - `/queue Investigate stale operator registrations`
 - `/queue-work Investigate stale operator registrations`
 - `/handoff codex Investigate stale operator registrations`
@@ -172,6 +174,8 @@ The operator and CLI adapters support a lightweight broker-backed work layer on 
 - `/update-work-status 12 block Waiting on broker logs`
 
 Handoffs stay linked to the current DM or room conversation when one is active, so the work item and its discussion stay tied together.
+
+The operator also has a `[T] Tasks` action that opens a grouped task overview in the thread/detail view, so queued, assigned, active, and blocked work can be inspected without leaving the current operator UI.
 
 Ownership is enforced at the broker:
 

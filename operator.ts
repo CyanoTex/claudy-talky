@@ -151,6 +151,7 @@ function windowAround<T>(items: T[], selectedIndex: number, count: number): T[] 
 function helpLines(): string[] {
   return [
     "Slash commands: /help /leave /agents /rooms /reply /details [minimal|compact|verbose]",
+    "/tasks",
     "/queue <summary> /queue-work <summary>",
     "/handoff <agent> <summary> /handoff-work <agent> <summary>",
     "/assign <work-id> <agent> [note] /assign-work <work-id> <agent> [note] /requeue <work-id> [note]",
@@ -174,6 +175,7 @@ const ACTION_ITEMS = [
   { label: "Reply", shortcut: "R" },
   { label: "Leave", shortcut: "L" },
   { label: "Refresh", shortcut: "F" },
+  { label: "Tasks", shortcut: "T" },
   { label: "Remove agent", shortcut: "X" },
   { label: "Help", shortcut: "H" },
 ] as const;
@@ -607,6 +609,50 @@ function App(): ReactElement {
     showDetail(`Work (${filter})`, lines);
   }, [brokerPost, participantDisplay, showDetail]);
 
+  const showTasksOverview = useCallback(async () => {
+    const current = stateRef.current;
+    const result = await brokerPost<ListWorkResponse>("/list-work", {
+      agent_id: current.myId,
+      include_done: false,
+      limit: 100,
+      auth_token: current.authToken,
+    });
+
+    const sections: Array<{ title: string; items: typeof result.work_items }> = [
+      { title: "Queued", items: result.work_items.filter((work) => work.status === "queued") },
+      { title: "Assigned", items: result.work_items.filter((work) => work.status === "assigned") },
+      { title: "Active", items: result.work_items.filter((work) => work.status === "active") },
+      { title: "Blocked", items: result.work_items.filter((work) => work.status === "blocked") },
+    ];
+
+    const lines: string[] = [
+      "Quick commands:",
+      "- /work <id> or /get-work <id>",
+      "- /take <id>",
+      "- /assign <id> <agent> [note]",
+      "- /requeue <id> [note]",
+      "- /block <id> <reason>",
+      "- /done <id> [note]",
+    ];
+
+    const total = sections.reduce((count, section) => count + section.items.length, 0);
+    if (total === 0) {
+      lines.push("", "No active tasks.");
+    } else {
+      for (const section of sections) {
+        if (section.items.length === 0) {
+          continue;
+        }
+        lines.push("", `${section.title}:`);
+        for (const work of section.items) {
+          lines.push(`- ${formatWorkListLine(work, participantDisplay)}`);
+        }
+      }
+    }
+
+    showDetail("Tasks", lines);
+  }, [brokerPost, participantDisplay, showDetail]);
+
   const queueWork = useCallback(async (summary: string) => {
     const current = stateRef.current;
     const result = await brokerPost<QueueWorkResponse>("/queue-work", {
@@ -854,6 +900,9 @@ function App(): ReactElement {
       case "F":
         await fullRefresh();
         return;
+      case "T":
+        await showTasksOverview();
+        return;
       case "X":
         await removeAgentFromBroker(stateRef.current.selectedAgentId ?? "");
         return;
@@ -869,6 +918,7 @@ function App(): ReactElement {
       case "quit": await shutdown(0); return;
       case "leave": leaveContext(); return;
       case "reply": await switchReplyContext(); return;
+      case "tasks": await showTasksOverview(); return;
       case "queue": await queueWork(command.summary); return;
       case "handoff": await handoffWork(command.agentSelector, command.summary); return;
       case "assign": await assignWork(command.workId, command.agentSelector, command.note); return;
@@ -904,7 +954,7 @@ function App(): ReactElement {
         throw new Error(`Unhandled command: ${String(neverReached)}`);
       }
     }
-  }, [assignWork, createRoom, handoffWork, leaveContext, queueWork, refreshAgents, removeAgentFromBroker, sendInCurrentContext, setNotice, showContext, showHistory, showParticipants, showDetail, showWorkDetail, showWorkList, shutdown, switchDm, switchReplyContext, updateState, updateWorkStatus, useRoom]);
+  }, [assignWork, createRoom, handoffWork, leaveContext, queueWork, refreshAgents, removeAgentFromBroker, sendInCurrentContext, setNotice, showContext, showHistory, showParticipants, showDetail, showTasksOverview, showWorkDetail, showWorkList, shutdown, switchDm, switchReplyContext, updateState, updateWorkStatus, useRoom]);
 
   const handleSubmit = useCallback(async (rawValue: string) => {
     const value = rawValue.trim();

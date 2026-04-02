@@ -27,6 +27,10 @@ test("parses DM and room slash commands", () => {
     kind: "reply",
   });
 
+  expect(parseOperatorInput("/tasks")).toEqual({
+    kind: "tasks",
+  });
+
   expect(parseOperatorInput("/handoff codex Fix operator scroll UX")).toEqual({
     kind: "handoff",
     agentSelector: "codex",
@@ -299,6 +303,7 @@ test("rejects invalid room and history usage", () => {
 });
 
 test("help text documents the operator slash commands", () => {
+  expect(operatorHelpText()).toContain("/tasks");
   expect(operatorHelpText()).toContain("/handoff <agent-ref-or-name> <summary>");
   expect(operatorHelpText()).toContain("/handoff-work <agent-ref-or-name> <summary>");
   expect(operatorHelpText()).toContain("/queue <summary>");
