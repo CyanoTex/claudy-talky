@@ -622,9 +622,13 @@ function focusElementForPane(pane: FocusPane): { focus: () => void } {
 }
 
 function focusPane(pane: FocusPane): void {
+  const target = focusElementForPane(pane);
+  const alreadyFocused = activePane === pane && screen.focused === target;
   activePane = pane;
   composerEditing = pane === "composer";
-  focusElementForPane(pane).focus();
+  if (!alreadyFocused) {
+    target.focus();
+  }
   if (pane === "actions") {
     setNotice("Actions focused. Use Left/Right to choose an action and Enter to run it.");
   }
@@ -1484,26 +1488,41 @@ async function shutdown(code: number): Promise<never> {
 
 function wireFocusTracking(): void {
   actionStrip.on("focus", () => {
+    if (activePane === "actions" && !composerEditing) {
+      return;
+    }
     activePane = "actions";
     composerEditing = false;
     renderAll();
   });
   agentsList.on("focus", () => {
+    if (activePane === "agents" && !composerEditing) {
+      return;
+    }
     activePane = "agents";
     composerEditing = false;
     renderAll();
   });
   roomsList.on("focus", () => {
+    if (activePane === "rooms" && !composerEditing) {
+      return;
+    }
     activePane = "rooms";
     composerEditing = false;
     renderAll();
   });
   threadBox.on("focus", () => {
+    if (activePane === "thread" && !composerEditing) {
+      return;
+    }
     activePane = "thread";
     composerEditing = false;
     renderAll();
   });
   composer.on("focus", () => {
+    if (activePane === "composer" && composerEditing) {
+      return;
+    }
     activePane = "composer";
     composerEditing = true;
     renderAll();
