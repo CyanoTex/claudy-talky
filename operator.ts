@@ -331,8 +331,8 @@ const composer = blessed.box({
 
 const composerPrompt = blessed.box({
   parent: composer,
-  top: 0,
-  left: 0,
+  top: 1,
+  left: 1,
   width: 2,
   height: 1,
   tags: false,
@@ -346,9 +346,9 @@ const composerPrompt = blessed.box({
 
 const composerInput = blessed.box({
   parent: composer,
-  top: 0,
-  left: 2,
-  width: "100%-2",
+  top: 1,
+  left: 3,
+  width: "100%-4",
   height: 1,
   tags: false,
   content: "",
