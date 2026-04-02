@@ -46,6 +46,12 @@ type OperatorContext =
 
 type FocusPane = "actions" | "agents" | "rooms" | "thread" | "composer";
 type NoticeLevel = "info" | "warn" | "error";
+type OperatorAction = {
+  label: string;
+  shortcut: string;
+  handler: () => void | Promise<void>;
+  box?: any;
+};
 
 const BROKER_URL = `http://127.0.0.1:${getBrokerPort()}`;
 const HEARTBEAT_INTERVAL_MS = 5_000;
@@ -75,6 +81,7 @@ let modalReturnFocus: { focus: () => void } | null = null;
 let composerEditing = false;
 let composerValue = "";
 let swallowNextComposerKeypress = false;
+let selectedActionIndex = 0;
 
 const screen = blessed.screen({
   smartCSR: true,
@@ -138,7 +145,7 @@ const actionHint = blessed.box({
   },
 });
 
-const actionTabs = blessed.listbar({
+const actionStrip = blessed.box({
   parent: actionBar,
   top: 0,
   left: 1,
@@ -146,27 +153,8 @@ const actionTabs = blessed.listbar({
   height: 1,
   mouse: true,
   keys: true,
-  vi: false,
-  autoCommandKeys: false,
   style: {
-    bg: "white",
-    item: {
-      fg: "black",
-      bg: "white",
-      hover: {
-        fg: "white",
-        bg: "blue",
-      },
-    },
-    selected: {
-      fg: "white",
-      bg: "blue",
-      bold: true,
-    },
-    prefix: {
-      fg: "black",
-      bg: "white",
-    },
+    bg: "black",
   },
 });
 
@@ -372,30 +360,43 @@ const modal = blessed.scrollablebox({
   },
 });
 
-function createActionCommand(
-  content: string,
-  handler: () => void | Promise<void>
-) {
-  return {
-    text: content,
-    prefix: "",
-    callback: () => {
-      void Promise.resolve(handler()).catch((error) => {
-        showError(error instanceof Error ? error.message : String(error));
-      });
-    },
-  };
-}
+const actionCommands: OperatorAction[] = [
+  { label: "DM selected", shortcut: "D", handler: () => openSelectedAgent() },
+  { label: "Open room", shortcut: "O", handler: () => openSelectedRoom() },
+  { label: "Reply", shortcut: "R", handler: () => switchReplyContext() },
+  { label: "Leave", shortcut: "L", handler: () => leaveContext() },
+  { label: "Refresh", shortcut: "F5", handler: () => fullRefresh() },
+  { label: "Help", shortcut: "H", handler: () => showHelp() },
+];
 
-actionTabs.setItems([
-  createActionCommand("DM selected", () => openSelectedAgent()),
-  createActionCommand("Open room", () => openSelectedRoom()),
-  createActionCommand("Reply", () => switchReplyContext()),
-  createActionCommand("Leave", () => leaveContext()),
-  createActionCommand("Refresh", () => fullRefresh()),
-  createActionCommand("Help", () => showHelp()),
-]);
-actionTabs.select(0);
+let actionLeft = 0;
+for (const [index, action] of actionCommands.entries()) {
+  const content = `[${action.shortcut}] ${action.label}`;
+  const box = blessed.box({
+    parent: actionStrip,
+    top: 0,
+    left: actionLeft,
+    width: content.length + 2,
+    height: 1,
+    mouse: true,
+    tags: false,
+    content: ` ${content} `,
+    style: {
+      fg: "black",
+      bg: "white",
+      bold: true,
+    },
+  });
+
+  box.on("click", () => {
+    selectedActionIndex = index;
+    focusPane("actions");
+    void invokeSelectedAction();
+  });
+
+  action.box = box;
+  actionLeft += content.length + 3;
+}
 
 function nowText(): string {
   return new Date().toISOString();
@@ -547,7 +548,7 @@ function showError(message: string): void {
 function focusElementForPane(pane: FocusPane): { focus: () => void } {
   switch (pane) {
     case "actions":
-      return actionTabs;
+      return actionStrip;
     case "agents":
       return agentsList;
     case "rooms":
@@ -575,6 +576,22 @@ function cycleFocus(direction: 1 | -1): void {
   const currentIndex = panes.indexOf(activePane);
   const nextIndex = (currentIndex + direction + panes.length) % panes.length;
   focusPane(panes[nextIndex]!);
+}
+
+function renderActions(): void {
+  actionCommands.forEach((action, index) => {
+    const box = action.box;
+    if (!box) {
+      return;
+    }
+
+    const isSelected = index === selectedActionIndex;
+    const isFocused = activePane === "actions" && isSelected;
+    box.setContent(` [${action.shortcut}] ${action.label} `);
+    box.style.fg = isFocused ? "black" : isSelected ? "white" : "black";
+    box.style.bg = isFocused ? "yellow" : isSelected ? "blue" : "white";
+    box.style.bold = true;
+  });
 }
 
 function renderPaneChrome(): void {
@@ -735,6 +752,7 @@ function renderComposer(): void {
 }
 
 function renderAll(): void {
+  renderActions();
   renderPaneChrome();
   renderTitleBar();
   renderAgents();
@@ -742,6 +760,28 @@ function renderAll(): void {
   renderThread();
   renderComposer();
   screen.render();
+}
+
+function moveSelectedAction(direction: 1 | -1): void {
+  selectedActionIndex =
+    (selectedActionIndex + direction + actionCommands.length) % actionCommands.length;
+  if (activePane !== "actions") {
+    activePane = "actions";
+  }
+  renderAll();
+}
+
+async function invokeSelectedAction(): Promise<void> {
+  const action = actionCommands[selectedActionIndex];
+  if (!action) {
+    return;
+  }
+
+  try {
+    await Promise.resolve(action.handler());
+  } catch (error) {
+    showError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function refreshAgents(): Promise<Agent[]> {
@@ -1336,7 +1376,7 @@ async function shutdown(code: number): Promise<never> {
 }
 
 function wireFocusTracking(): void {
-  actionTabs.on("focus", () => {
+  actionStrip.on("focus", () => {
     activePane = "actions";
     composerEditing = false;
     renderAll();
@@ -1382,6 +1422,30 @@ function wireKeyboardShortcuts(): void {
     }
 
     cycleFocus(-1);
+  });
+
+  screen.key(["left"], () => {
+    if (helpModalOpen || activePane !== "actions") {
+      return;
+    }
+
+    moveSelectedAction(-1);
+  });
+
+  screen.key(["right"], () => {
+    if (helpModalOpen || activePane !== "actions") {
+      return;
+    }
+
+    moveSelectedAction(1);
+  });
+
+  screen.key(["enter"], () => {
+    if (helpModalOpen || activePane !== "actions") {
+      return;
+    }
+
+    void invokeSelectedAction();
   });
 
   screen.key(["/"], () => {
