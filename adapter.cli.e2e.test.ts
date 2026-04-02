@@ -358,20 +358,22 @@ for (const config of CLI_ADAPTERS) {
       const adapterAgent = await waitForAgentByKind(config.kind);
 
       const tools = await session.client.listTools();
-      expect(tools.tools.map((tool) => tool.name)).toEqual(
-        expect.arrayContaining([
-          "whoami",
-          "list_agents",
-          "send_message",
-          "message_history",
-          "list_work",
-          "get_work",
-          "handoff_work",
-          "update_work_status",
-          "set_summary",
-          "check_messages",
-        ])
-      );
+        expect(tools.tools.map((tool) => tool.name)).toEqual(
+          expect.arrayContaining([
+            "whoami",
+            "list_agents",
+            "send_message",
+            "message_history",
+            "queue_work",
+            "list_work",
+            "get_work",
+            "handoff_work",
+            "assign_work",
+            "update_work_status",
+            "set_summary",
+            "check_messages",
+          ])
+        );
 
       const whoAmI = textContent(
         await session.client.callTool({ name: "whoami", arguments: {} })
@@ -471,6 +473,41 @@ for (const config of CLI_ADAPTERS) {
       expect(inboundMessage.reply_to_message_id).toBe(outboundMessage.id);
 
       const workSummary = `${config.label} work ${Date.now()}`;
+      const queuedSummary = `${config.label} queued ${Date.now()}`;
+      const queueText = textContent(
+        await session.client.callTool({
+          name: "queue_work",
+          arguments: {
+            summary: queuedSummary,
+            conversation_id: outboundMessage.conversation_id,
+          },
+        })
+      );
+      expect(queueText).toContain("Queued work #");
+
+      const queuedListText = await waitForToolText(
+        session.client,
+        "list_work",
+        { status: "queued", limit: 20 },
+        queuedSummary
+      );
+      const queuedWorkIdMatch = queuedListText.match(/#(\d+)/);
+      expect(queuedWorkIdMatch).not.toBeNull();
+      const queuedWorkId = Number(queuedWorkIdMatch?.[1]);
+      expect(Number.isInteger(queuedWorkId)).toBe(true);
+
+      const assignQueuedText = textContent(
+        await session.client.callTool({
+          name: "assign_work",
+          arguments: {
+            work_id: queuedWorkId,
+            to_id: helper.id,
+            note: "assign from queue in e2e",
+          },
+        })
+      );
+      expect(assignQueuedText).toContain(`Assigned work #${queuedWorkId} to agent ${helper.id}.`);
+
       const handoffText = textContent(
         await session.client.callTool({
           name: "handoff_work",

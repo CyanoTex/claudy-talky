@@ -116,10 +116,15 @@ Slash commands still work in the composer:
 /details [minimal|compact|verbose]
 /dm <agent-ref-or-name> [message]
 /msg <agent-ref-or-name> <message>
+/queue <summary>
+/queue-work <summary>
 /handoff <agent-ref-or-name> <summary>
 /handoff-work <agent-ref-or-name> <summary>
-/work [open|all|mine|assigned|active|blocked|done|<id>]
-/list-work [open|all|mine|assigned|active|blocked|done|<id>]
+/assign <work-id> <agent-ref-or-name> [note]
+/assign-work <work-id> <agent-ref-or-name> [note]
+/requeue <work-id> [note]
+/work [open|all|mine|queued|assigned|active|blocked|done|<id>]
+/list-work [open|all|mine|queued|assigned|active|blocked|done|<id>]
 /get-work <work-id>
 /take <work-id>
 /block <work-id> <reason>
@@ -148,12 +153,18 @@ Plain text in the composer sends to the current DM or room.
 
 The operator and CLI adapters support a lightweight broker-backed work layer on top of normal threads:
 
+- `/queue Investigate stale operator registrations`
+- `/queue-work Investigate stale operator registrations`
 - `/handoff codex Investigate stale operator registrations`
 - `/handoff-work codex Investigate stale operator registrations`
 - `/work mine`
+- `/work queued`
 - `/list-work blocked`
 - `/get-work 12`
 - `/work 12`
+- `/assign 12 codex hand off after triage`
+- `/assign-work 12 codex hand off after triage`
+- `/requeue 12 waiting for pickup`
 - `/take 12`
 - `/block 12 Waiting on broker logs`
 - `/done 12 Fixed in operator.ts`
@@ -166,6 +177,8 @@ Ownership is enforced at the broker:
 
 - `take` only works if the work is unassigned or already assigned to you
 - `block`, `done`, and `activate` only work for the current owner
+- the built-in human operator can reassign work or override ownership transitions when needed
+- queued work uses the explicit `queued` state rather than overloading `assigned`
 
 ## Setup Helper
 
@@ -314,9 +327,11 @@ z.ai looks possible as a provider layer, but not yet as a first-class `claudy-ta
 | `list_agents` | Discover connected agents on this machine, in this directory, or in this repo |
 | `send_message` | Send a message to another agent by ID |
 | `message_history` | Revisit recent messages, optionally filtered to one agent or one conversation |
+| `queue_work` | Create queued work without assigning it to an agent yet |
 | `list_work` | List active or historical work items, optionally filtered by owner or status |
 | `get_work` | Inspect one work item plus its event history |
 | `handoff_work` | Create a work handoff for another agent, optionally linked to a thread |
+| `assign_work` | Reassign work to another agent or return it to the queue |
 | `update_work_status` | Mark a work item taken, blocked, done, or otherwise update its state |
 | `set_summary` | Publish a short description of Claude's current work |
 | `check_messages` | Manually check for inbound messages |

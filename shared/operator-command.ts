@@ -4,7 +4,10 @@ export type OperatorCommand =
   | { kind: "leave" }
   | { kind: "reply" }
   | { kind: "handoff"; agentSelector: string; summary: string }
-  | { kind: "work-list"; filter: "open" | "all" | "mine" | "assigned" | "active" | "blocked" | "done" }
+  | { kind: "queue"; summary: string }
+  | { kind: "assign"; workId: number; agentSelector: string; note?: string }
+  | { kind: "requeue"; workId: number; note?: string }
+  | { kind: "work-list"; filter: "open" | "all" | "mine" | "queued" | "assigned" | "active" | "blocked" | "done" }
   | { kind: "work-open"; workId: number }
   | { kind: "take"; workId: number }
   | { kind: "block"; workId: number; reason: string }
@@ -120,23 +123,47 @@ export function parseOperatorInput(line: string): OperatorCommand {
             summary: rest.join(" "),
           }
         : { kind: "error", message: "Usage: /handoff <agent-ref-or-name> <summary>" };
+    case "queue":
+    case "queue-work":
+      return subcommand
+        ? { kind: "queue", summary: [subcommand, ...rest].join(" ") }
+        : { kind: "error", message: "Usage: /queue <summary>" };
+    case "assign":
+    case "assign-work": {
+      const workId = Number.parseInt(subcommand ?? "", 10);
+      const [agentSelector, ...noteParts] = rest;
+      return Number.isInteger(workId) && workId > 0 && agentSelector
+        ? {
+            kind: "assign",
+            workId,
+            agentSelector,
+            note: noteParts.length > 0 ? noteParts.join(" ") : undefined,
+          }
+        : { kind: "error", message: "Usage: /assign <work-id> <agent-ref-or-name> [note]" };
+    }
+    case "requeue": {
+      const workId = Number.parseInt(subcommand ?? "", 10);
+      return Number.isInteger(workId) && workId > 0
+        ? { kind: "requeue", workId, note: rest.length > 0 ? rest.join(" ") : undefined }
+        : { kind: "error", message: "Usage: /requeue <work-id> [note]" };
+    }
     case "work":
     case "list-work": {
       if (!subcommand) {
         return { kind: "work-list", filter: "open" };
       }
 
-      if (["open", "all", "mine", "assigned", "active", "blocked", "done"].includes(subcommand)) {
+      if (["open", "all", "mine", "queued", "assigned", "active", "blocked", "done"].includes(subcommand)) {
         return {
           kind: "work-list",
-          filter: subcommand as "open" | "all" | "mine" | "assigned" | "active" | "blocked" | "done",
+          filter: subcommand as "open" | "all" | "mine" | "queued" | "assigned" | "active" | "blocked" | "done",
         };
       }
 
       const workId = Number.parseInt(subcommand, 10);
       return Number.isInteger(workId) && workId > 0
         ? { kind: "work-open", workId }
-        : { kind: "error", message: "Usage: /work [open|all|mine|assigned|active|blocked|done|<id>] | /list-work [open|all|mine|assigned|active|blocked|done|<id>]" };
+        : { kind: "error", message: "Usage: /work [open|all|mine|queued|assigned|active|blocked|done|<id>] | /list-work [open|all|mine|queued|assigned|active|blocked|done|<id>]" };
     }
     case "get-work": {
       const workId = Number.parseInt(subcommand ?? "", 10);
@@ -272,10 +299,15 @@ return `Slash commands:
 /help
 /leave
 /agents
+/queue <summary>
+/queue-work <summary>
 /handoff <agent-ref-or-name> <summary>
 /handoff-work <agent-ref-or-name> <summary>
-/work [open|all|mine|assigned|active|blocked|done|<id>]
-/list-work [open|all|mine|assigned|active|blocked|done|<id>]
+/assign <work-id> <agent-ref-or-name> [note]
+/assign-work <work-id> <agent-ref-or-name> [note]
+/requeue <work-id> [note]
+/work [open|all|mine|queued|assigned|active|blocked|done|<id>]
+/list-work [open|all|mine|queued|assigned|active|blocked|done|<id>]
 /get-work <work-id>
 /take <work-id>
 /block <work-id> <reason>

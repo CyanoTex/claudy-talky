@@ -39,6 +39,16 @@ test("parses DM and room slash commands", () => {
     summary: "Fix operator scroll UX",
   });
 
+  expect(parseOperatorInput("/queue Investigate flaky queue behavior")).toEqual({
+    kind: "queue",
+    summary: "Investigate flaky queue behavior",
+  });
+
+  expect(parseOperatorInput("/queue-work Investigate flaky queue behavior")).toEqual({
+    kind: "queue",
+    summary: "Investigate flaky queue behavior",
+  });
+
   expect(parseOperatorInput("/work")).toEqual({
     kind: "work-list",
     filter: "open",
@@ -52,6 +62,11 @@ test("parses DM and room slash commands", () => {
   expect(parseOperatorInput("/list-work blocked")).toEqual({
     kind: "work-list",
     filter: "blocked",
+  });
+
+  expect(parseOperatorInput("/work queued")).toEqual({
+    kind: "work-list",
+    filter: "queued",
   });
 
   expect(parseOperatorInput("/work 12")).toEqual({
@@ -108,6 +123,26 @@ test("parses DM and room slash commands", () => {
     kind: "activate",
     workId: 12,
     note: "resumed",
+  });
+
+  expect(parseOperatorInput("/assign 12 codex")).toEqual({
+    kind: "assign",
+    workId: 12,
+    agentSelector: "codex",
+    note: undefined,
+  });
+
+  expect(parseOperatorInput("/assign-work 12 codex hand off after triage")).toEqual({
+    kind: "assign",
+    workId: 12,
+    agentSelector: "codex",
+    note: "hand off after triage",
+  });
+
+  expect(parseOperatorInput("/requeue 12 waiting for pickup")).toEqual({
+    kind: "requeue",
+    workId: 12,
+    note: "waiting for pickup",
   });
 
   expect(parseOperatorInput("/details")).toEqual({
@@ -187,9 +222,14 @@ test("rejects invalid room and history usage", () => {
     message: "Usage: /handoff <agent-ref-or-name> <summary>",
   });
 
+  expect(parseOperatorInput("/queue")).toEqual({
+    kind: "error",
+    message: "Usage: /queue <summary>",
+  });
+
   expect(parseOperatorInput("/work unknown")).toEqual({
     kind: "error",
-    message: "Usage: /work [open|all|mine|assigned|active|blocked|done|<id>] | /list-work [open|all|mine|assigned|active|blocked|done|<id>]",
+    message: "Usage: /work [open|all|mine|queued|assigned|active|blocked|done|<id>] | /list-work [open|all|mine|queued|assigned|active|blocked|done|<id>]",
   });
 
   expect(parseOperatorInput("/take nope")).toEqual({
@@ -215,6 +255,16 @@ test("rejects invalid room and history usage", () => {
   expect(parseOperatorInput("/activate nope")).toEqual({
     kind: "error",
     message: "Usage: /activate <work-id> [note]",
+  });
+
+  expect(parseOperatorInput("/assign 12")).toEqual({
+    kind: "error",
+    message: "Usage: /assign <work-id> <agent-ref-or-name> [note]",
+  });
+
+  expect(parseOperatorInput("/requeue nope")).toEqual({
+    kind: "error",
+    message: "Usage: /requeue <work-id> [note]",
   });
 
   expect(parseOperatorInput("/update-work-status 12")).toEqual({
@@ -251,8 +301,13 @@ test("rejects invalid room and history usage", () => {
 test("help text documents the operator slash commands", () => {
   expect(operatorHelpText()).toContain("/handoff <agent-ref-or-name> <summary>");
   expect(operatorHelpText()).toContain("/handoff-work <agent-ref-or-name> <summary>");
-  expect(operatorHelpText()).toContain("/work [open|all|mine|assigned|active|blocked|done|<id>]");
-  expect(operatorHelpText()).toContain("/list-work [open|all|mine|assigned|active|blocked|done|<id>]");
+  expect(operatorHelpText()).toContain("/queue <summary>");
+  expect(operatorHelpText()).toContain("/queue-work <summary>");
+  expect(operatorHelpText()).toContain("/assign <work-id> <agent-ref-or-name> [note]");
+  expect(operatorHelpText()).toContain("/assign-work <work-id> <agent-ref-or-name> [note]");
+  expect(operatorHelpText()).toContain("/requeue <work-id> [note]");
+  expect(operatorHelpText()).toContain("/work [open|all|mine|queued|assigned|active|blocked|done|<id>]");
+  expect(operatorHelpText()).toContain("/list-work [open|all|mine|queued|assigned|active|blocked|done|<id>]");
   expect(operatorHelpText()).toContain("/get-work <work-id>");
   expect(operatorHelpText()).toContain("/take <work-id>");
   expect(operatorHelpText()).toContain("/block <work-id> <reason>");

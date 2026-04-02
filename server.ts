@@ -53,11 +53,13 @@ import {
 import type {
   Agent,
   AgentId,
+  AssignWorkResponse,
   GetWorkResponse,
   HandoffWorkResponse,
   ListWorkResponse,
   Message,
   PollMessagesResponse,
+  QueueWorkResponse,
   SendMessageResponse,
   UpdateWorkStatusResponse,
   WhoAmIResponse,
@@ -244,9 +246,11 @@ Available tools:
 - list_agents: Discover other connected agents on this machine
 - send_message: Send a message to another agent by ID
 - message_history: Revisit recent messages or a specific conversation
+- queue_work: Put work into the shared queue without assigning it yet
 - list_work: Inspect current handoff and work items
 - get_work: Inspect one work item in detail
 - handoff_work: Hand work to another agent and notify them
+- assign_work: Reassign work to another agent or return it to the queue
 - update_work_status: Take, block, or complete a work item
 - set_summary: Set a 1-2 sentence summary of what you're working on
 - check_messages: Manually check for new messages
@@ -360,7 +364,7 @@ const TOOLS = [
       properties: {
         status: {
           type: "string" as const,
-          enum: ["assigned", "active", "blocked", "done"],
+          enum: ["queued", "assigned", "active", "blocked", "done"],
           description: "Optional work status filter.",
         },
         owner_id: {
@@ -380,6 +384,29 @@ const TOOLS = [
           description: "Maximum number of work items to return. Defaults to 20.",
         },
       },
+    },
+  },
+  {
+    name: "queue_work",
+    description:
+      "Create a queued work item without assigning it to a specific agent yet.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        summary: {
+          type: "string" as const,
+          description: "What needs to be done and why.",
+        },
+        title: {
+          type: "string" as const,
+          description: "Optional short title. If omitted, the first summary line is used.",
+        },
+        conversation_id: {
+          type: "string" as const,
+          description: "Optional conversation ID to attach the queued work to an existing thread.",
+        },
+      },
+      required: ["summary"],
     },
   },
   {
@@ -422,6 +449,29 @@ const TOOLS = [
         },
       },
       required: ["to_id", "summary"],
+    },
+  },
+  {
+    name: "assign_work",
+    description:
+      "Assign a work item to another agent, or omit to_id to return it to the queue.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        work_id: {
+          type: "number" as const,
+          description: "Work item ID.",
+        },
+        to_id: {
+          type: "string" as const,
+          description: "Optional target agent ID from list_agents. Omit it to return the work to the queue.",
+        },
+        note: {
+          type: "string" as const,
+          description: "Optional reassignment note.",
+        },
+      },
+      required: ["work_id"],
     },
   },
   {
@@ -702,7 +752,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         const { status, owner_id, conversation_id, include_done, limit } = args as {
-          status?: "assigned" | "active" | "blocked" | "done";
+          status?: "queued" | "assigned" | "active" | "blocked" | "done";
           owner_id?: string;
           conversation_id?: string;
           include_done?: boolean;
@@ -751,6 +801,50 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: `Error listing work: ${error instanceof Error ? error.message : String(error)}`,
             },
           ],
+          isError: true,
+        };
+      }
+    }
+
+    case "queue_work": {
+      if (!myId) {
+        return {
+          content: [{ type: "text" as const, text: "Not registered with broker yet" }],
+          isError: true,
+        };
+      }
+
+      try {
+        const { summary, title, conversation_id } = args as {
+          summary: string;
+          title?: string;
+          conversation_id?: string;
+        };
+
+        const result = await brokerFetch<QueueWorkResponse>(
+          BROKER_URL,
+          "/queue-work",
+          withAuth({
+            agent_id: myId,
+            summary,
+            title,
+            conversation_id,
+          })
+        );
+
+        if (!result.ok || !result.work) {
+          return {
+            content: [{ type: "text" as const, text: `Failed to queue work: ${result.error ?? "unknown error"}` }],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [{ type: "text" as const, text: `Queued work #${result.work.id}.` }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `Error queueing work: ${error instanceof Error ? error.message : String(error)}` }],
           isError: true,
         };
       }
@@ -862,6 +956,50 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: `Error creating handoff: ${error instanceof Error ? error.message : String(error)}`,
             },
           ],
+          isError: true,
+        };
+      }
+    }
+
+    case "assign_work": {
+      if (!myId) {
+        return {
+          content: [{ type: "text" as const, text: "Not registered with broker yet" }],
+          isError: true,
+        };
+      }
+
+      try {
+        const { work_id, to_id, note } = args as {
+          work_id: number;
+          to_id?: string;
+          note?: string;
+        };
+
+        const result = await brokerFetch<AssignWorkResponse>(
+          BROKER_URL,
+          "/assign-work",
+          withAuth({
+            agent_id: myId,
+            work_id,
+            to_id,
+            note,
+          })
+        );
+
+        if (!result.ok || !result.work) {
+          return {
+            content: [{ type: "text" as const, text: `Failed to assign work #${work_id}: ${result.error ?? "unknown error"}` }],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [{ type: "text" as const, text: to_id ? `Assigned work #${result.work.id} to agent ${to_id}.` : `Returned work #${result.work.id} to the queue.` }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `Error assigning work item: ${error instanceof Error ? error.message : String(error)}` }],
           isError: true,
         };
       }

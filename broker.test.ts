@@ -635,6 +635,17 @@ test("creates handoffs, tracks work state, and records work events", async () =>
     }
   );
 
+  const gemini = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Gemini",
+      kind: "google-gemini",
+      transport: "mcp-stdio",
+      capabilities: ["messaging"],
+      summary: "Observing the work queue.",
+    }
+  );
+
   const handoff = await brokerFetch<{
     ok: boolean;
     work?: {
@@ -704,18 +715,56 @@ test("creates handoffs, tracks work state, and records work events", async () =>
   expect(detail.events[0]?.kind).toBe("handoff");
   expect(detail.events[0]?.status).toBe("assigned");
 
-  const operatorTakeRejected = await brokerFetch<{
+  const queued = await brokerFetch<{
     ok: boolean;
-    error?: string;
-  }>("/update-work-status", {
+    work?: { id: number; owner_id: string | null; status: string };
+  }>("/queue-work", {
     agent_id: operator.id,
-    work_id: handoff.work?.id,
-    action: "take",
+    summary: "Investigate queue pickup flow",
     auth_token: operator.auth_token,
   });
 
-  expect(operatorTakeRejected.ok).toBe(false);
-  expect(operatorTakeRejected.error).toContain(codex.id);
+  expect(queued.ok).toBe(true);
+  expect(queued.work?.owner_id).toBeNull();
+  expect(queued.work?.status).toBe("queued");
+
+  const queuedList = await brokerFetch<{
+    work_items: Array<{ id: number; status: string }>;
+  }>("/list-work", {
+    agent_id: operator.id,
+    status: "queued",
+    auth_token: operator.auth_token,
+  });
+
+  expect(queuedList.work_items.some((work) => work.id === queued.work?.id)).toBe(true);
+
+  const geminiTakeRejected = await brokerFetch<{
+    ok: boolean;
+    error?: string;
+  }>("/update-work-status", {
+    agent_id: gemini.id,
+    work_id: handoff.work?.id,
+    action: "take",
+    auth_token: gemini.auth_token,
+  });
+
+  expect(geminiTakeRejected.ok).toBe(false);
+  expect(geminiTakeRejected.error).toContain(codex.id);
+
+  const assignQueued = await brokerFetch<{
+    ok: boolean;
+    work?: { owner_id: string | null; status: string };
+  }>("/assign-work", {
+    agent_id: operator.id,
+    work_id: queued.work?.id,
+    to_id: codex.id,
+    note: "Pick this up next",
+    auth_token: operator.auth_token,
+  });
+
+  expect(assignQueued.ok).toBe(true);
+  expect(assignQueued.work?.owner_id).toBe(codex.id);
+  expect(assignQueued.work?.status).toBe("assigned");
 
   const taken = await brokerFetch<{
     ok: boolean;
@@ -747,9 +796,38 @@ test("creates handoffs, tracks work state, and records work events", async () =>
   expect(blocked.work?.status).toBe("blocked");
   expect(blocked.work?.blocker_note).toBe("Waiting on repro steps");
 
-  const operatorDoneRejected = await brokerFetch<{
+  const geminiDoneRejected = await brokerFetch<{
     ok: boolean;
     error?: string;
+  }>("/update-work-status", {
+    agent_id: gemini.id,
+    work_id: handoff.work?.id,
+    action: "done",
+    note: "Shipped",
+    auth_token: gemini.auth_token,
+  });
+
+  expect(geminiDoneRejected.ok).toBe(false);
+  expect(geminiDoneRejected.error).toContain(codex.id);
+
+  const adminAssign = await brokerFetch<{
+    ok: boolean;
+    work?: { status: string; owner_id: string | null; blocker_note: string | null };
+  }>("/assign-work", {
+    agent_id: operator.id,
+    work_id: handoff.work?.id,
+    to_id: operator.id,
+    note: "Taking over as operator",
+    auth_token: operator.auth_token,
+  });
+
+  expect(adminAssign.ok).toBe(true);
+  expect(adminAssign.work?.status).toBe("assigned");
+  expect(adminAssign.work?.owner_id).toBe(operator.id);
+
+  const done = await brokerFetch<{
+    ok: boolean;
+    work?: { status: string; blocker_note: string | null; owner_id: string | null };
   }>("/update-work-status", {
     agent_id: operator.id,
     work_id: handoff.work?.id,
@@ -758,24 +836,10 @@ test("creates handoffs, tracks work state, and records work events", async () =>
     auth_token: operator.auth_token,
   });
 
-  expect(operatorDoneRejected.ok).toBe(false);
-  expect(operatorDoneRejected.error).toContain(codex.id);
-
-  const done = await brokerFetch<{
-    ok: boolean;
-    work?: { status: string; blocker_note: string | null; owner_id: string | null };
-  }>("/update-work-status", {
-    agent_id: codex.id,
-    work_id: handoff.work?.id,
-    action: "done",
-    note: "Shipped",
-    auth_token: codex.auth_token,
-  });
-
   expect(done.ok).toBe(true);
   expect(done.work?.status).toBe("done");
   expect(done.work?.blocker_note).toBeNull();
-  expect(done.work?.owner_id).toBe(codex.id);
+  expect(done.work?.owner_id).toBe(operator.id);
 
   const doneHidden = await brokerFetch<{
     work_items: Array<{ id: number }>;
@@ -799,6 +863,7 @@ test("creates handoffs, tracks work state, and records work events", async () =>
     "handoff",
     "take",
     "block",
+    "assign",
     "done",
   ]);
   expect(finalDetail.events.at(-1)?.note).toBe("Shipped");

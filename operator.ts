@@ -36,18 +36,18 @@ import {
 } from "./shared/work-format.ts";
 import type {
   Agent,
+  AssignWorkResponse,
   GetWorkResponse,
   HandoffWorkResponse,
   ListWorkResponse,
   Message,
   MessageHistoryRequest,
   PollMessagesResponse,
+  QueueWorkResponse,
   RemoveAgentAdminResponse,
   SendMessageResponse,
   UpdateWorkStatusResponse,
   UnregisterRequest,
-  WorkItem,
-  WorkStatus,
 } from "./shared/types.ts";
 
 type OperatorRoom = { name: string; conversationId: string; participantIds: string[] };
@@ -151,8 +151,10 @@ function windowAround<T>(items: T[], selectedIndex: number, count: number): T[] 
 function helpLines(): string[] {
   return [
     "Slash commands: /help /leave /agents /rooms /reply /details [minimal|compact|verbose]",
+    "/queue <summary> /queue-work <summary>",
     "/handoff <agent> <summary> /handoff-work <agent> <summary>",
-    "/work [open|all|mine|assigned|active|blocked|done|<id>] /list-work ... /get-work <work-id>",
+    "/assign <work-id> <agent> [note] /assign-work <work-id> <agent> [note] /requeue <work-id> [note]",
+    "/work [open|all|mine|queued|assigned|active|blocked|done|<id>] /list-work ... /get-work <work-id>",
     "/take <work-id> /block <work-id> <reason> /done <work-id> [note] /activate <work-id> [note]",
     "/update-work-status <work-id> <take|block|done|activate> [note]",
     "/dm <agent> [message] /msg <agent> <message>",
@@ -567,7 +569,7 @@ function App(): ReactElement {
   }, [loadCurrentHistory, setNotice]);
 
   const showWorkList = useCallback(async (
-    filter: "open" | "all" | "mine" | "assigned" | "active" | "blocked" | "done"
+    filter: "open" | "all" | "mine" | "queued" | "assigned" | "active" | "blocked" | "done"
   ) => {
     const current = stateRef.current;
     const request: Record<string, unknown> = {
@@ -580,6 +582,7 @@ function App(): ReactElement {
       case "mine":
         request.owner_id = current.myId;
         break;
+      case "queued":
       case "assigned":
       case "active":
       case "blocked":
@@ -603,6 +606,23 @@ function App(): ReactElement {
 
     showDetail(`Work (${filter})`, lines);
   }, [brokerPost, participantDisplay, showDetail]);
+
+  const queueWork = useCallback(async (summary: string) => {
+    const current = stateRef.current;
+    const result = await brokerPost<QueueWorkResponse>("/queue-work", {
+      agent_id: current.myId,
+      summary,
+      conversation_id: currentConversationId(current),
+      auth_token: current.authToken,
+    });
+
+    if (!result.ok || !result.work) {
+      throw new Error(result.error ?? "Failed to queue work.");
+    }
+
+    setNotice(`Queued work #${result.work.id}.`);
+    await refreshAgents();
+  }, [brokerPost, refreshAgents, setNotice]);
 
   const showWorkDetail = useCallback(async (workId: number) => {
     const current = stateRef.current;
@@ -665,6 +685,48 @@ function App(): ReactElement {
       `Created handoff #${result.work.id} for ${participantDisplay(resolution.record.agent.id)}.`
     );
   }, [brokerPost, loadCurrentHistory, participantDisplay, refreshAgents, rememberDmConversation, setNotice]);
+
+  const assignWork = useCallback(async (
+    workId: number,
+    selector: string | null,
+    note?: string
+  ) => {
+    const current = stateRef.current;
+    let targetId: string | null = null;
+
+    if (selector) {
+      await refreshAgents();
+      const resolution = resolveAgentSelector(stateRef.current.agentRefs, selector);
+      if (!resolution.ok) {
+        throw new Error(resolution.error);
+      }
+      targetId = resolution.record.agent.id;
+    }
+
+    const result = await brokerPost<AssignWorkResponse>("/assign-work", {
+      agent_id: current.myId,
+      work_id: workId,
+      to_id: targetId,
+      note,
+      auth_token: current.authToken,
+    });
+
+    if (!result.ok || !result.work) {
+      throw new Error(result.error ?? `Failed to update assignment for work #${workId}.`);
+    }
+
+    if (stateRef.current.detailPanel?.title === `Work #${workId}`) {
+      await showWorkDetail(workId);
+    } else {
+      await refreshAgents();
+    }
+
+    setNotice(
+      targetId
+        ? `Assigned work #${workId} to ${participantDisplay(targetId)}.`
+        : `Returned work #${workId} to the queue.`
+    );
+  }, [brokerPost, participantDisplay, refreshAgents, setNotice, showWorkDetail]);
 
   const updateWorkStatus = useCallback(async (
     workId: number,
@@ -807,7 +869,10 @@ function App(): ReactElement {
       case "quit": await shutdown(0); return;
       case "leave": leaveContext(); return;
       case "reply": await switchReplyContext(); return;
+      case "queue": await queueWork(command.summary); return;
       case "handoff": await handoffWork(command.agentSelector, command.summary); return;
+      case "assign": await assignWork(command.workId, command.agentSelector, command.note); return;
+      case "requeue": await assignWork(command.workId, null, command.note); return;
       case "work-list": await showWorkList(command.filter); return;
       case "work-open": await showWorkDetail(command.workId); return;
       case "take": await updateWorkStatus(command.workId, "take"); return;
@@ -839,7 +904,7 @@ function App(): ReactElement {
         throw new Error(`Unhandled command: ${String(neverReached)}`);
       }
     }
-  }, [createRoom, handoffWork, leaveContext, refreshAgents, removeAgentFromBroker, sendInCurrentContext, setNotice, showContext, showHistory, showParticipants, showDetail, showWorkDetail, showWorkList, shutdown, switchDm, switchReplyContext, updateState, updateWorkStatus, useRoom]);
+  }, [assignWork, createRoom, handoffWork, leaveContext, queueWork, refreshAgents, removeAgentFromBroker, sendInCurrentContext, setNotice, showContext, showHistory, showParticipants, showDetail, showWorkDetail, showWorkList, shutdown, switchDm, switchReplyContext, updateState, updateWorkStatus, useRoom]);
 
   const handleSubmit = useCallback(async (rawValue: string) => {
     const value = rawValue.trim();
@@ -904,7 +969,7 @@ function App(): ReactElement {
           transport: "ink-tui",
           cwd: cwd(),
           summary: "Interactive human operator Ink session.",
-          capabilities: ["messaging", "message_history", "operator_console"],
+          capabilities: ["messaging", "message_history", "operator_console", "work_admin"],
           metadata: { client: "claudy-talky Operator Remake", launcher: "bun", adapter: "claudy-talky", ui: "ink", parent_pid: process.ppid },
         });
         if (cancelled) return;

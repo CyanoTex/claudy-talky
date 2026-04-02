@@ -9,7 +9,11 @@ export function formatWorkListLine(
   participantDisplay: (agentId: AgentId) => string
 ): string {
   const owner =
-    work.owner_id !== null ? participantDisplay(work.owner_id) : "unassigned";
+    work.status === "queued"
+      ? "queue"
+      : work.owner_id !== null
+        ? participantDisplay(work.owner_id)
+        : "unassigned";
   return `${workLabel(work)} ${owner} ${work.title}`;
 }
 
@@ -24,7 +28,11 @@ export function formatWorkDetailLines(
     `Status: ${work.status}`,
     `Created by: ${participantDisplay(work.created_by_id)}`,
     `Owner: ${
-      work.owner_id !== null ? participantDisplay(work.owner_id) : "unassigned"
+      work.status === "queued"
+        ? "queue"
+        : work.owner_id !== null
+          ? participantDisplay(work.owner_id)
+          : "unassigned"
     }`,
     `Conversation: ${work.conversation_id ?? "(none)"}`,
     `Created: ${work.created_at}`,

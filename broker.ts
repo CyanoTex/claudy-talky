@@ -42,6 +42,10 @@ import type {
   MessageHistoryResponse,
   PollMessagesRequest,
   PollMessagesResponse,
+  QueueWorkRequest,
+  QueueWorkResponse,
+  AssignWorkRequest,
+  AssignWorkResponse,
   ListWorkRequest,
   ListWorkResponse,
   GetWorkRequest,
@@ -671,6 +675,7 @@ function normalizeWorkId(value: unknown): number {
 function normalizeWorkStatus(value: unknown): WorkStatus | null {
   const status = normalizeText(value).toLowerCase();
   switch (status) {
+    case "queued":
     case "assigned":
     case "active":
     case "blocked":
@@ -898,6 +903,23 @@ function requireAgentAuth(id: string, authToken: unknown): AgentAuthRow {
   }
 
   return agent;
+}
+
+function requireAuthedAgentRow(id: string, authToken: unknown): AgentRow {
+  requireAgentAuth(id, authToken);
+  const row = selectAgentRowById.get(id) as AgentRow | null;
+  if (!row) {
+    throw new BrokerRequestError(404, `Agent ${id} not found`);
+  }
+  return row;
+}
+
+function hasAgentCapability(row: AgentRow, capability: string): boolean {
+  return parseJsonArray(row.capabilities).includes(capability);
+}
+
+function isWorkAdminAgent(row: AgentRow): boolean {
+  return row.kind === "human-operator" || hasAgentCapability(row, "work_admin");
 }
 
 function isAgentFresh(agent: Agent): boolean {
@@ -1294,6 +1316,53 @@ function handleSendMessage(body: SendMessageRequest): SendMessageResponse {
   return insertStoredMessage(body);
 }
 
+function handleQueueWork(body: QueueWorkRequest): QueueWorkResponse {
+  requireAgentAuth(body.agent_id, body.auth_token);
+
+  const summary = normalizeText(body.summary);
+  if (!summary) {
+    return { ok: false, error: "Work summary cannot be empty" };
+  }
+
+  const conversationId = normalizeOptionalText(body.conversation_id);
+  const title = deriveWorkTitle(summary, body.title);
+  const now = new Date().toISOString();
+
+  const result = insertWorkItem.run(
+    title,
+    summary,
+    conversationId,
+    body.agent_id,
+    null,
+    "queued",
+    null,
+    now,
+    now
+  );
+  const workId = normalizeCount(result.lastInsertRowid);
+
+  const eventResult = insertWorkEvent.run(
+    workId,
+    body.agent_id,
+    "queue",
+    null,
+    null,
+    "queued",
+    summary,
+    now
+  );
+
+  const work = toWorkItem(selectWorkRowById.get(workId) as WorkItemRow);
+  const eventId = normalizeCount(eventResult.lastInsertRowid);
+  const event = toWorkEvent(
+    (selectWorkEventRowsByWorkId.all(workId) as WorkEventRow[]).find(
+      (row) => row.id === eventId
+    ) as WorkEventRow
+  );
+
+  return { ok: true, work, event };
+}
+
 function handleHandoffWork(body: HandoffWorkRequest): HandoffWorkResponse {
   requireAgentAuth(body.agent_id, body.auth_token);
 
@@ -1376,6 +1445,74 @@ function handleHandoffWork(body: HandoffWorkRequest): HandoffWorkResponse {
   };
 }
 
+function handleAssignWork(body: AssignWorkRequest): AssignWorkResponse {
+  const actor = requireAuthedAgentRow(body.agent_id, body.auth_token);
+  const workId = normalizeWorkId(body.work_id);
+  if (workId <= 0) {
+    return { ok: false, error: "work_id must be a positive integer" };
+  }
+
+  const workRow = selectWorkRowById.get(workId) as WorkItemRow | null;
+  if (!workRow) {
+    return { ok: false, error: `Work item #${workId} not found` };
+  }
+
+  const currentWork = toWorkItem(workRow);
+  const targetId = normalizeOptionalText(body.to_id);
+  const note = normalizeOptionalText(body.note);
+  const isAdmin = isWorkAdminAgent(actor);
+
+  if (
+    !isAdmin &&
+    currentWork.owner_id !== actor.id &&
+    !(currentWork.owner_id === null && currentWork.created_by_id === actor.id)
+  ) {
+    return {
+      ok: false,
+      error: `Work item #${workId} is owned by ${currentWork.owner_id ?? "the queue"}. Only the owner, queue creator, or an operator can reassign it.`,
+    };
+  }
+
+  if (targetId) {
+    const target = selectAgentRowById.get(targetId) as AgentRow | null;
+    if (!target) {
+      return { ok: false, error: `Agent ${targetId} not found` };
+    }
+  }
+
+  const nextOwnerId = targetId;
+  const nextStatus: WorkStatus = targetId ? "assigned" : "queued";
+  const blockerNote = null;
+  const now = new Date().toISOString();
+  const eventKind: WorkEventKind = targetId ? "assign" : "queue";
+
+  updateWorkItem.run(nextOwnerId, nextStatus, blockerNote, now, workId);
+  const eventInsert = insertWorkEvent.run(
+    workId,
+    actor.id,
+    eventKind,
+    currentWork.owner_id,
+    nextOwnerId,
+    nextStatus,
+    note,
+    now
+  );
+
+  const updatedWork = toWorkItem(selectWorkRowById.get(workId) as WorkItemRow);
+  const eventId = normalizeCount(eventInsert.lastInsertRowid);
+  const updatedEvent = toWorkEvent(
+    (selectWorkEventRowsByWorkId.all(workId) as WorkEventRow[]).find(
+      (row) => row.id === eventId
+    ) as WorkEventRow
+  );
+
+  return {
+    ok: true,
+    work: updatedWork,
+    event: updatedEvent,
+  };
+}
+
 function handleListWork(body: ListWorkRequest): ListWorkResponse {
   requireAgentAuth(body.agent_id, body.auth_token);
 
@@ -1402,6 +1539,12 @@ function handleListWork(body: ListWorkRequest): ListWorkResponse {
         return false;
       }
       return true;
+    })
+    .sort((left, right) => {
+      if (left.status === "queued" && right.status === "queued") {
+        return left.id - right.id;
+      }
+      return 0;
     })
     .slice(0, limit);
 
@@ -1431,7 +1574,8 @@ function handleGetWork(body: GetWorkRequest): GetWorkResponse {
 function handleUpdateWorkStatus(
   body: UpdateWorkStatusRequest
 ): UpdateWorkStatusResponse {
-  requireAgentAuth(body.agent_id, body.auth_token);
+  const actor = requireAuthedAgentRow(body.agent_id, body.auth_token);
+  const isAdmin = isWorkAdminAgent(actor);
 
   const workId = normalizeWorkId(body.work_id);
   if (workId <= 0) {
@@ -1459,7 +1603,7 @@ function handleUpdateWorkStatus(
 
   switch (action) {
     case "take":
-      if (currentWork.owner_id !== null && currentWork.owner_id !== body.agent_id) {
+      if (!isAdmin && currentWork.owner_id !== null && currentWork.owner_id !== body.agent_id) {
         return {
           ok: false,
           error: `Work item #${workId} is owned by ${currentWork.owner_id}. Only the current owner can take it.`,
@@ -1471,13 +1615,13 @@ function handleUpdateWorkStatus(
       eventKind = "take";
       break;
     case "block":
-      if (currentWork.owner_id === null) {
+      if (!isAdmin && currentWork.owner_id === null) {
         return {
           ok: false,
           error: `Work item #${workId} is unassigned. Take it before blocking it.`,
         };
       }
-      if (currentWork.owner_id !== body.agent_id) {
+      if (!isAdmin && currentWork.owner_id !== body.agent_id) {
         return {
           ok: false,
           error: `Work item #${workId} is owned by ${currentWork.owner_id}. Only the current owner can block it.`,
@@ -1488,13 +1632,13 @@ function handleUpdateWorkStatus(
       eventKind = "block";
       break;
     case "done":
-      if (currentWork.owner_id === null) {
+      if (!isAdmin && currentWork.owner_id === null) {
         return {
           ok: false,
           error: `Work item #${workId} is unassigned. Take it before completing it.`,
         };
       }
-      if (currentWork.owner_id !== body.agent_id) {
+      if (!isAdmin && currentWork.owner_id !== body.agent_id) {
         return {
           ok: false,
           error: `Work item #${workId} is owned by ${currentWork.owner_id}. Only the current owner can mark it done.`,
@@ -1505,13 +1649,13 @@ function handleUpdateWorkStatus(
       eventKind = "done";
       break;
     case "activate":
-      if (currentWork.owner_id === null) {
+      if (!isAdmin && currentWork.owner_id === null) {
         return {
           ok: false,
           error: `Work item #${workId} is unassigned. Take it before activating it.`,
         };
       }
-      if (currentWork.owner_id !== body.agent_id) {
+      if (!isAdmin && currentWork.owner_id !== body.agent_id) {
         return {
           ok: false,
           error: `Work item #${workId} is owned by ${currentWork.owner_id}. Only the current owner can reactivate it.`,
@@ -1756,6 +1900,8 @@ Bun.serve({
           return jsonResponse(handleListAgents(body as ListAgentsRequest));
         case "/send-message":
           return jsonResponse(handleSendMessage(body as SendMessageRequest));
+        case "/queue-work":
+          return jsonResponse(handleQueueWork(body as QueueWorkRequest));
         case "/poll-messages":
           return jsonResponse(handlePollMessages(body as PollMessagesRequest));
         case "/mark-messages-surfaced":
@@ -1770,6 +1916,8 @@ Bun.serve({
           return jsonResponse(handleMessageHistory(body as MessageHistoryRequest));
         case "/handoff-work":
           return jsonResponse(handleHandoffWork(body as HandoffWorkRequest));
+        case "/assign-work":
+          return jsonResponse(handleAssignWork(body as AssignWorkRequest));
         case "/list-work":
           return jsonResponse(handleListWork(body as ListWorkRequest));
         case "/get-work":

@@ -36,8 +36,15 @@ export interface Message {
   seen_at: string | null;
 }
 
-export type WorkStatus = "assigned" | "active" | "blocked" | "done";
-export type WorkEventKind = "handoff" | "take" | "block" | "done" | "status";
+export type WorkStatus = "queued" | "assigned" | "active" | "blocked" | "done";
+export type WorkEventKind =
+  | "queue"
+  | "handoff"
+  | "assign"
+  | "take"
+  | "block"
+  | "done"
+  | "status";
 
 export interface WorkItem {
   id: number;
@@ -193,6 +200,21 @@ export interface HandoffWorkResponse {
   notification_message?: Message;
 }
 
+export interface QueueWorkRequest {
+  agent_id: AgentId;
+  summary: string;
+  title?: string;
+  conversation_id?: string | null;
+  auth_token?: string;
+}
+
+export interface QueueWorkResponse {
+  ok: boolean;
+  error?: string;
+  work?: WorkItem;
+  event?: WorkEvent;
+}
+
 export interface ListWorkRequest {
   agent_id: AgentId;
   status?: WorkStatus;
@@ -216,6 +238,21 @@ export interface GetWorkRequest {
 export interface GetWorkResponse {
   work: WorkItem | null;
   events: WorkEvent[];
+}
+
+export interface AssignWorkRequest {
+  agent_id: AgentId;
+  work_id: number;
+  to_id?: AgentId | null;
+  note?: string | null;
+  auth_token?: string;
+}
+
+export interface AssignWorkResponse {
+  ok: boolean;
+  error?: string;
+  work?: WorkItem;
+  event?: WorkEvent;
 }
 
 export interface UpdateWorkStatusRequest {
