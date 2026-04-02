@@ -314,10 +314,14 @@ const composer = blessed.box({
   keys: true,
   tags: false,
   style: {
+    fg: "white",
+    bg: "black",
     border: {
       fg: "green",
     },
     focus: {
+      fg: "white",
+      bg: "black",
       border: {
         fg: "yellow",
       },
@@ -852,6 +856,7 @@ function renderAll(): void {
   renderRooms();
   renderThread();
   renderComposer();
+  originalHideCursor();
   screen.render();
   syncComposerCursor();
 }
