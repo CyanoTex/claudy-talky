@@ -96,6 +96,7 @@ Enter                        Run the selected Action or send composer text
 Esc                          Clear the composer and leave edit mode
 Ctrl+A                       Jump straight to the Actions strip
 x                            Jump to the Actions strip
+v                            Toggle compact vs verbose message details
 Ctrl+R                       Reply to the last inbound sender
 Ctrl+L                       Leave the current DM or room
 F5                           Refresh agents and the current thread
@@ -105,6 +106,7 @@ Slash commands still work in the composer:
 
 ```text
 /agents
+/details [compact|verbose]
 /dm <agent-ref-or-name> [message]
 /msg <agent-ref-or-name> <message>
 /reply

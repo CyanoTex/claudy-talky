@@ -82,6 +82,8 @@ let composerEditing = false;
 let composerValue = "";
 let swallowNextComposerKeypress = false;
 let selectedActionIndex = 0;
+let threadDetailMode: "compact" | "verbose" = "compact";
+let lastRenderedThreadSignature = "";
 
 const screen = blessed.screen({
   smartCSR: true,
@@ -480,6 +482,17 @@ function noteMessageConversation(message: Message): void {
   }
 }
 
+function sortMessagesChronologically(messages: Message[]): Message[] {
+  return [...messages].sort((left, right) => {
+    const sentAtDelta = left.sent_at.localeCompare(right.sent_at);
+    if (sentAtDelta !== 0) {
+      return sentAtDelta;
+    }
+
+    return left.id - right.id;
+  });
+}
+
 function formatMessageForThread(message: Message): string {
   const room = roomForConversation(message.conversation_id);
   const header = `[${message.sent_at}] #${message.id} ${participantDisplay(message.from_id)} -> ${participantDisplay(message.to_id)}${
@@ -489,7 +502,12 @@ function formatMessageForThread(message: Message): string {
     header,
     ...message.text.split(/\r?\n/).map((line) => `  ${line}`),
   ];
-  appendMessageStateLines(lines, message);
+  if (message.reply_to_message_id && threadDetailMode === "compact") {
+    lines.push(`  Reply to #${message.reply_to_message_id}`);
+  }
+  if (threadDetailMode === "verbose") {
+    appendMessageStateLines(lines, message);
+  }
   return lines.join("\n");
 }
 
@@ -639,7 +657,7 @@ function renderTitleBar(): void {
   noticeBar.style.fg = lastNoticeLevel === "warn" ? "black" : "white";
   noticeBar.setContent(` ${lastNotice}`);
   actionHint.setContent(
-    "Tab cycles panes. Use Left/Right + Enter on Actions. Type directly in the composer."
+    `Tab cycles panes. Use Left/Right + Enter on Actions. Type directly in the composer. [V] details: ${threadDetailMode}.`
   );
 }
 
@@ -698,6 +716,7 @@ function renderRooms(): void {
 
 function renderThread(): void {
   if (currentContext.kind === "none") {
+    lastRenderedThreadSignature = "";
     threadHeader.setContent(
       "No active context.\n\nSelect an agent to open a DM, create a room with `/room create`, or use `/msg <agent> <text>`."
     );
@@ -730,13 +749,19 @@ function renderThread(): void {
   }
 
   if (currentMessages.length === 0) {
+    lastRenderedThreadSignature = "";
     threadBox.setContent("No messages in the current context.");
     threadBox.scrollTo(0);
     return;
   }
 
-  threadBox.setContent(currentMessages.map(formatMessageForThread).join("\n\n"));
-  threadBox.setScrollPerc(100);
+  const orderedMessages = sortMessagesChronologically(currentMessages);
+  const content = orderedMessages.map(formatMessageForThread).join("\n\n");
+  if (content !== lastRenderedThreadSignature) {
+    threadBox.setContent(content);
+    threadBox.setScrollPerc(100);
+    lastRenderedThreadSignature = content;
+  }
 }
 
 function renderComposer(): void {
@@ -880,7 +905,7 @@ async function loadCurrentHistory(limit = currentHistoryLimit): Promise<void> {
   }
 
   const history = await messageHistoryCompatible(BROKER_URL, currentContextRequest(limit));
-  currentMessages = [...history.messages].reverse();
+  currentMessages = sortMessagesChronologically(history.messages);
   await refreshAgents();
   renderAll();
 }
@@ -910,7 +935,7 @@ async function sendDirectMessage(agentId: string, text: string): Promise<void> {
   setNotice(`Sent message #${result.message.id} to ${participantDisplay(agentId)}.`);
 
   if (currentContext.kind === "dm" && currentContext.agentId === agentId) {
-    currentMessages.push(result.message);
+    currentMessages = sortMessagesChronologically([...currentMessages, result.message]);
   }
 
   await refreshAgents();
@@ -961,7 +986,7 @@ async function sendRoomMessage(room: OperatorRoom, text: string): Promise<void> 
   }
 
   if (currentContext.kind === "room" && currentContext.conversationId === room.conversationId) {
-    currentMessages.push(...sentMessages);
+    currentMessages = sortMessagesChronologically([...currentMessages, ...sentMessages]);
   }
 
   if (failures.length > 0) {
@@ -1324,6 +1349,12 @@ async function runCommand(command: OperatorCommand): Promise<void> {
     case "reply":
       await switchReplyContext();
       return;
+    case "details":
+      threadDetailMode =
+        command.mode ?? (threadDetailMode === "compact" ? "verbose" : "compact");
+      setNotice(`Message details: ${threadDetailMode}.`);
+      renderAll();
+      return;
     case "agents":
       await refreshAgents();
       setNotice("Agents refreshed.");
@@ -1561,6 +1592,16 @@ function wireKeyboardShortcuts(): void {
       return;
     }
     showHelp();
+  });
+
+  screen.key(["v"], () => {
+    if (helpModalOpen || isComposerFocused()) {
+      return;
+    }
+
+    threadDetailMode = threadDetailMode === "compact" ? "verbose" : "compact";
+    setNotice(`Message details: ${threadDetailMode}.`);
+    renderAll();
   });
 
   modal.key(["escape", "enter", "q"], () => {

@@ -3,6 +3,7 @@ export type OperatorCommand =
   | { kind: "quit" }
   | { kind: "leave" }
   | { kind: "reply" }
+  | { kind: "details"; mode?: "compact" | "verbose" }
   | { kind: "agents" }
   | { kind: "rooms" }
   | { kind: "participants" }
@@ -102,6 +103,13 @@ export function parseOperatorInput(line: string): OperatorCommand {
       return { kind: "leave" };
     case "reply":
       return { kind: "reply" };
+    case "details":
+      if (!subcommand) {
+        return { kind: "details" };
+      }
+      return subcommand === "compact" || subcommand === "verbose"
+        ? { kind: "details", mode: subcommand }
+        : { kind: "error", message: "Usage: /details [compact|verbose]" };
     case "agents":
       return { kind: "agents" };
     case "rooms":
@@ -166,6 +174,7 @@ return `Slash commands:
 /leave
 /agents
 /reply
+/details [compact|verbose]
 /dm <agent-ref-or-name> [message]
 /msg <agent-ref-or-name> <message>
 /room create <name> <agent-ref-or-name...|all>
@@ -185,6 +194,7 @@ Enter runs the selected Action or sends the composer text
 Esc clears the composer and leaves edit mode
 Ctrl+A jumps straight to the Actions strip
 x jumps to the Actions strip
+v toggles compact vs verbose message details
 
 Use refs from /agents, for example: /dm codex, /dm claude:claudy-talky Ping, /msg "Codex @ claudy-talky" "Need a quick status?"`;
 }
