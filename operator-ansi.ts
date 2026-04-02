@@ -391,6 +391,10 @@ function drawBox(canvas: string[][], box: LayoutBox, label: string): void {
   }
 }
 
+function boxLabel(base: string, focused: boolean): string {
+  return focused ? `[${base}]` : base;
+}
+
 function fillBox(canvas: string[][], box: LayoutBox, lines: string[]): void {
   const innerWidth = Math.max(0, box.width - 2);
   const innerHeight = Math.max(0, box.height - 2);
@@ -537,9 +541,10 @@ function closeModal(): void {
 function renderActionsLine(width: number): string {
   const parts = actions.map((action, index) => {
     const selected = index === selectedActionIndex;
-    return selected && activePane === "actions"
-      ? `[${action.shortcut}] ${action.label}`
-      : ` ${action.shortcut}  ${action.label}`;
+    if (selected && activePane === "actions") {
+      return `>[${action.shortcut}] ${action.label}<`;
+    }
+    return `[${action.shortcut}] ${action.label}`;
   });
   return padText(parts.join("   "), width);
 }
@@ -560,7 +565,7 @@ function noticeLineText(width: number): string {
 }
 
 function hintLineText(width: number): string {
-  return padText(`${statusBarHint} [v] details: ${threadDetailMode}.`, width);
+  return padText(`${statusBarHint} [V] details: ${threadDetailMode}.`, width);
 }
 
 function currentTerminalSize(): { width: number; height: number } {
@@ -701,14 +706,14 @@ function renderAll(): void {
   putText(canvas, 0, 2, renderActionsLine(width), width);
   putText(canvas, 0, 3, hintLineText(width), width);
 
-  drawBox(canvas, layout.agents, `${activePane === "agents" ? "*" : ""} Agents`);
-  drawBox(canvas, layout.rooms, `${activePane === "rooms" ? "*" : ""} Rooms`);
-  drawBox(canvas, layout.threadHeader, `${activePane === "thread" ? "*" : ""} Thread`);
-  drawBox(canvas, layout.messages, `${activePane === "thread" ? "*" : ""} Messages`);
+  drawBox(canvas, layout.agents, boxLabel("Agents", activePane === "agents"));
+  drawBox(canvas, layout.rooms, boxLabel("Rooms", activePane === "rooms"));
+  drawBox(canvas, layout.threadHeader, boxLabel("Thread", activePane === "thread"));
+  drawBox(canvas, layout.messages, boxLabel("Messages", activePane === "thread"));
   drawBox(
     canvas,
     layout.composer,
-    `${activePane === "composer" ? "*" : ""} Composer | ${contextLabel()}${activePane === "composer" ? " | editing" : ""}`
+    `${boxLabel("Composer", activePane === "composer")} | ${contextLabel()}${activePane === "composer" ? " | editing" : ""}`
   );
 
   fillBox(canvas, layout.agents, renderAgentListLines(layout.agents.height - 2));
