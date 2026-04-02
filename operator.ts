@@ -80,6 +80,9 @@ let helpModalOpen = false;
 let modalReturnFocus: { focus: () => void } | null = null;
 let composerEditing = false;
 let composerValue = "";
+let composerCursorIndex = 0;
+let composerScrollOffset = 0;
+let composerRenderedCursorOffset = 0;
 let swallowNextComposerKeypress = false;
 let selectedActionIndex = 0;
 let threadDetailMode: "minimal" | "compact" | "verbose" = "minimal";
@@ -348,29 +351,13 @@ const composerInput = blessed.box({
   parent: composer,
   top: 1,
   left: 3,
-  width: "100%-5",
+  width: "100%-4",
   height: 1,
   tags: false,
   content: "",
   style: {
     fg: "white",
     bg: "black",
-  },
-});
-
-const composerCursor = blessed.box({
-  parent: composerInput,
-  top: 0,
-  left: 0,
-  width: 1,
-  height: 1,
-  tags: false,
-  hidden: true,
-  content: "|",
-  style: {
-    fg: "yellow",
-    bg: "black",
-    bold: true,
   },
 });
 
@@ -540,6 +527,81 @@ function sortMessagesChronologically(messages: Message[]): Message[] {
 
     return left.id - right.id;
   });
+}
+
+function composerChars(): string[] {
+  return Array.from(composerValue);
+}
+
+function clampComposerCursor(chars = composerChars()): void {
+  composerCursorIndex = Math.max(0, Math.min(composerCursorIndex, chars.length));
+}
+
+function setComposerDraft(value: string, cursorIndex?: number): void {
+  composerValue = value;
+  const chars = composerChars();
+  composerCursorIndex =
+    cursorIndex === undefined
+      ? chars.length
+      : Math.max(0, Math.min(cursorIndex, chars.length));
+  composerScrollOffset = 0;
+}
+
+function clearComposerDraft(): void {
+  composerValue = "";
+  composerCursorIndex = 0;
+  composerScrollOffset = 0;
+  composerRenderedCursorOffset = 0;
+}
+
+function insertComposerText(text: string): void {
+  const chars = composerChars();
+  clampComposerCursor(chars);
+  const insertChars = Array.from(text);
+  if (insertChars.length === 0) {
+    return;
+  }
+
+  chars.splice(composerCursorIndex, 0, ...insertChars);
+  composerValue = chars.join("");
+  composerCursorIndex += insertChars.length;
+}
+
+function deleteComposerBackward(): void {
+  const chars = composerChars();
+  clampComposerCursor(chars);
+  if (composerCursorIndex === 0) {
+    return;
+  }
+
+  chars.splice(composerCursorIndex - 1, 1);
+  composerValue = chars.join("");
+  composerCursorIndex -= 1;
+}
+
+function deleteComposerForward(): void {
+  const chars = composerChars();
+  clampComposerCursor(chars);
+  if (composerCursorIndex >= chars.length) {
+    return;
+  }
+
+  chars.splice(composerCursorIndex, 1);
+  composerValue = chars.join("");
+}
+
+function moveComposerCursor(delta: number): void {
+  const chars = composerChars();
+  clampComposerCursor(chars);
+  composerCursorIndex = Math.max(0, Math.min(composerCursorIndex + delta, chars.length));
+}
+
+function moveComposerCursorToStart(): void {
+  composerCursorIndex = 0;
+}
+
+function moveComposerCursorToEnd(): void {
+  composerCursorIndex = composerChars().length;
 }
 
 function cycleThreadDetailMode(): void {
@@ -855,51 +917,68 @@ function renderThread(): void {
 }
 
 function renderComposer(): void {
+  const chars = composerChars();
+  clampComposerCursor(chars);
   const inputCoords = composerInput._getCoords?.();
   const inputWidth =
     inputCoords && typeof inputCoords.xl === "number" && typeof inputCoords.xi === "number"
       ? Math.max(1, inputCoords.xl - inputCoords.xi + 1)
       : typeof screen.width === "number"
-        ? Math.max(8, Math.floor(screen.width) - 7)
+        ? Math.max(8, Math.floor(screen.width) - 6)
         : 80;
   const cursorVisible = isComposerFocused();
-  const maxVisibleTextWidth = Math.max(0, inputWidth - 1);
-  const visibleValue =
-    composerValue.length > maxVisibleTextWidth
-      ? composerValue.slice(composerValue.length - maxVisibleTextWidth)
-      : composerValue;
+  const maxVisibleChars = Math.max(1, inputWidth - 1);
+
+  if (chars.length <= maxVisibleChars) {
+    composerScrollOffset = 0;
+  } else {
+    const maxScroll = chars.length - maxVisibleChars;
+    composerScrollOffset = Math.max(0, Math.min(composerScrollOffset, maxScroll));
+    if (composerCursorIndex < composerScrollOffset) {
+      composerScrollOffset = composerCursorIndex;
+    } else if (composerCursorIndex > composerScrollOffset + maxVisibleChars) {
+      composerScrollOffset = composerCursorIndex - maxVisibleChars;
+    }
+  }
+
+  const visibleChars = chars.slice(
+    composerScrollOffset,
+    composerScrollOffset + maxVisibleChars
+  );
   const paddedValue =
-    inputWidth > 0
-      ? visibleValue.padEnd(cursorVisible ? maxVisibleTextWidth : inputWidth, " ")
-      : visibleValue;
+    inputWidth > 0 ? visibleChars.join("").padEnd(inputWidth, " ") : visibleChars.join("");
+  composerRenderedCursorOffset = Math.min(
+    composerCursorIndex - composerScrollOffset,
+    maxVisibleChars
+  );
 
   composer.setLabel(
     ` Composer | ${contextLabel()}${composerEditing ? " | editing" : ""} `
   );
   composerPrompt.setContent("> ");
   composerInput.setContent(paddedValue);
-
   if (!cursorVisible || inputWidth <= 0) {
-    composerCursor.hide();
-    return;
+    composerRenderedCursorOffset = 0;
   }
-
-  const cursorOffset = Math.min(visibleValue.length, maxVisibleTextWidth);
-  composerCursor.left = cursorOffset;
-  composerCursor.show();
 }
 
 function syncNativeCursorPosition(): void {
-  if (!isComposerFocused() || composerCursor.hidden) {
+  if (!isComposerFocused()) {
     return;
   }
 
-  const coords = composerCursor._getCoords?.();
+  const coords = composerInput._getCoords?.();
   if (!coords || typeof coords.xi !== "number" || typeof coords.yi !== "number") {
     return;
   }
 
-  screen.program.cup(coords.yi, coords.xi);
+  const maxCursorOffset =
+    typeof coords.xl === "number" && typeof coords.xi === "number"
+      ? Math.max(0, coords.xl - coords.xi)
+      : 0;
+  screen.program.cursorShape?.("line", false);
+  screen.program.cup(coords.yi, coords.xi + Math.min(composerRenderedCursorOffset, maxCursorOffset));
+  screen.program.showCursor();
 }
 
 function renderAll(): void {
@@ -1500,7 +1579,7 @@ async function runCommand(command: OperatorCommand): Promise<void> {
 
 async function handleComposerSubmit(rawValue: string): Promise<void> {
   const value = rawValue.trim();
-  composerValue = "";
+  clearComposerDraft();
 
   if (!value) {
     setNotice("Composer cleared.", "warn");
@@ -1629,7 +1708,7 @@ function wireKeyboardShortcuts(): void {
       return;
     }
 
-    composerValue = "/";
+    setComposerDraft("/", 1);
     swallowNextComposerKeypress = true;
     focusPane("composer");
   });
@@ -1740,14 +1819,44 @@ function wireKeyboardShortcuts(): void {
     }
 
     if (key.name === "escape") {
-      composerValue = "";
+      clearComposerDraft();
       composerEditing = false;
       focusPane("agents");
       return;
     }
 
     if (key.name === "backspace") {
-      composerValue = composerValue.slice(0, -1);
+      deleteComposerBackward();
+      renderAll();
+      return;
+    }
+
+    if (key.name === "delete") {
+      deleteComposerForward();
+      renderAll();
+      return;
+    }
+
+    if (key.name === "left") {
+      moveComposerCursor(-1);
+      renderAll();
+      return;
+    }
+
+    if (key.name === "right") {
+      moveComposerCursor(1);
+      renderAll();
+      return;
+    }
+
+    if (key.name === "home") {
+      moveComposerCursorToStart();
+      renderAll();
+      return;
+    }
+
+    if (key.name === "end") {
+      moveComposerCursorToEnd();
       renderAll();
       return;
     }
@@ -1770,7 +1879,7 @@ function wireKeyboardShortcuts(): void {
     }
 
     if (typeof ch === "string" && ch.length > 0) {
-      composerValue += ch;
+      insertComposerText(ch);
       renderAll();
     }
   });
