@@ -1,14 +1,12 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { getBrokerLockPath } from "./shared/config.ts";
 
-const port = 20000 + Math.floor(Math.random() * 1000);
-const dbPath = join(process.cwd(), `.broker-lock-${port}.sqlite`);
+const port = 21000 + Math.floor(Math.random() * 1000);
+const dbPath = join(process.cwd(), `.server-lifecycle-test-${port}.sqlite`);
 const brokerUrl = `http://127.0.0.1:${port}`;
-const lockPath = getBrokerLockPath(port);
 
-let primaryBroker: ReturnType<typeof Bun.spawn>;
+let brokerProcess: ReturnType<typeof Bun.spawn>;
 
 async function waitForBroker() {
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -44,8 +42,23 @@ async function brokerFetch<T>(path: string, body?: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function waitForAgentCount(expectedCount: number) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const agents = await brokerFetch<Array<{ id: string }>>("/list-agents", {
+      scope: "machine",
+    });
+    if (agents.length === expectedCount) {
+      return;
+    }
+
+    await Bun.sleep(100);
+  }
+
+  throw new Error(`Timed out waiting for ${expectedCount} agent(s)`);
+}
+
 beforeAll(async () => {
-  primaryBroker = Bun.spawn(["bun", "broker.ts"], {
+  brokerProcess = Bun.spawn(["bun", "broker.ts"], {
     cwd: process.cwd(),
     stdout: "ignore",
     stderr: "ignore",
@@ -53,7 +66,8 @@ beforeAll(async () => {
       ...process.env,
       CLAUDY_TALKY_PORT: String(port),
       CLAUDY_TALKY_DB: dbPath,
-      CLAUDY_TALKY_STALE_AGENT_MS: "10000",
+      CLAUDY_TALKY_STALE_AGENT_MS: "60000",
+      CLAUDY_TALKY_CLEANUP_INTERVAL_MS: "5000",
     },
   });
 
@@ -67,7 +81,7 @@ afterAll(async () => {
     // Best effort.
   }
 
-  await primaryBroker.exited;
+  await brokerProcess.exited;
 
   for (const suffix of ["", "-shm", "-wal"]) {
     const path = `${dbPath}${suffix}`;
@@ -75,44 +89,43 @@ afterAll(async () => {
       rmSync(path, { force: true });
     }
   }
-
-  rmSync(lockPath, { force: true });
 });
 
-test("exits quickly when another broker already owns the startup lock", async () => {
-  const competingBroker = Bun.spawn(["bun", "broker.ts"], {
+test("Claude adapter exits and unregisters when stdio closes", async () => {
+  const serverProcess = Bun.spawn(["bun", "server.ts"], {
     cwd: process.cwd(),
+    stdin: "pipe",
     stdout: "ignore",
     stderr: "pipe",
     env: {
       ...process.env,
       CLAUDY_TALKY_PORT: String(port),
-      CLAUDY_TALKY_DB: dbPath,
-      CLAUDY_TALKY_STALE_AGENT_MS: "10000",
     },
   });
 
-  const exitCode = await Promise.race([
-    competingBroker.exited,
-    Bun.sleep(3000).then(() => {
-      throw new Error("Competing broker did not exit");
-    }),
-  ]);
+  try {
+    await waitForAgentCount(1);
 
-  const stderr = await new Response(competingBroker.stderr).text();
+    serverProcess.stdin.end();
 
-  expect(exitCode).not.toBe(0);
-  expect(stderr).toContain("startup lock");
-  expect(existsSync(lockPath)).toBe(true);
+    const exited = await Promise.race([
+      serverProcess.exited.then(() => true),
+      Bun.sleep(3000).then(() => false),
+    ]);
 
-  const health = await brokerFetch<{
-    status: string;
-    schema_version: number;
-  }>("/health");
+    if (!exited) {
+      const stderrText = await new Response(serverProcess.stderr).text();
+      throw new Error(
+        `server.ts did not exit after stdin closed.\n${stderrText}`
+      );
+    }
 
-  expect(health.status).toBe("ok");
-  expect(health.schema_version).toBe(5);
-
-  const lockContents = readFileSync(lockPath, "utf8");
-  expect(lockContents).toContain(`"port":${port}`);
+    await waitForAgentCount(0);
+    expect(await serverProcess.exited).toBe(0);
+  } finally {
+    if (serverProcess.exitCode === null) {
+      serverProcess.kill();
+      await serverProcess.exited;
+    }
+  }
 });

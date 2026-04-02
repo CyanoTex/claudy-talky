@@ -1,13 +1,17 @@
 {
   "name": "claudy-talky",
   "version": "0.4.0",
-  "description": "Let Claude Code talk to any local agent through a shared broker",
+  "description": "Let Claude Code CLI talk to Codex CLI, Gemini CLI, and local agents through a shared broker",
   "module": "index.ts",
   "type": "module",
   "private": true,
   "scripts": {
     "broker": "bun broker.ts",
     "server": "bun server.ts",
+    "operator": "bun operator.ts",
+    "setup": "bun setup.ts install cli --scope user",
+    "setup:project": "bun setup.ts install cli --scope project",
+    "setup:all": "bun setup.ts install all --scope user",
     "server:codex": "bun codex-server.ts",
     "server:google": "bun google-server.ts",
     "server:gemini": "bun google-server.ts --client gemini",

@@ -23,6 +23,7 @@ import { dirname } from "node:path";
 import {
   getBrokerLockPath,
   getBrokerPort,
+  getCleanupIntervalMs,
   getDbFallbackPaths,
   getDbPath,
   getStaleAgentMs,
@@ -53,7 +54,8 @@ const PORT = getBrokerPort();
 const PRIMARY_DB_PATH = getDbPath();
 const LOCK_PATH = getBrokerLockPath(PORT);
 const STALE_AGENT_MS = getStaleAgentMs();
-const LATEST_SCHEMA_VERSION = 4;
+const CLEANUP_INTERVAL_MS = getCleanupIntervalMs();
+const LATEST_SCHEMA_VERSION = 5;
 const DEFAULT_HISTORY_LIMIT = 20;
 const MAX_HISTORY_LIMIT = 100;
 
@@ -90,6 +92,7 @@ type MessageRow = {
   delivered: number;
   delivered_at: string | null;
   surfaced_at: string | null;
+  opened_at: string | null;
   seen_at: string | null;
 };
 
@@ -445,6 +448,22 @@ function applyMigrations() {
     version = 4;
   }
 
+  if (version < 5) {
+    runMigration(5, "add explicit opened receipts", () => {
+      if (!columnExists("messages", "opened_at")) {
+        db.run("ALTER TABLE messages ADD COLUMN opened_at TEXT");
+      }
+
+      db.run(`
+        UPDATE messages
+        SET opened_at = COALESCE(opened_at, seen_at)
+        WHERE seen_at IS NOT NULL AND opened_at IS NULL
+      `);
+    });
+
+    version = 5;
+  }
+
   if (version !== LATEST_SCHEMA_VERSION) {
     throw new Error(
       `Unexpected schema version after migration: ${version} (expected ${LATEST_SCHEMA_VERSION})`
@@ -525,6 +544,23 @@ function normalizeReplyToMessageId(value: unknown): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+function normalizeBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1" || normalized === "yes";
+  }
+
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+
+  return false;
+}
+
 function normalizeHistoryLimit(value: unknown): number {
   const limit = typeof value === "number" ? value : Number(value);
   if (!Number.isInteger(limit) || limit <= 0) {
@@ -589,6 +625,7 @@ function toMessage(row: MessageRow): Message {
     delivered: row.delivered === 1,
     delivered_at: row.delivered_at ?? null,
     surfaced_at: row.surfaced_at ?? null,
+    opened_at: row.opened_at ?? null,
     seen_at: row.seen_at ?? null,
   };
 }
@@ -606,7 +643,6 @@ function deriveDefaultName(kind: string, cwd: string | null): string {
 
 function removeAgent(id: string) {
   deleteAgent.run(id);
-  deleteMessagesForAgent.run(id, id);
 }
 
 function requireAgentAuth(id: string, authToken: unknown): AgentAuthRow {
@@ -627,26 +663,40 @@ function requireAgentAuth(id: string, authToken: unknown): AgentAuthRow {
   return agent;
 }
 
+function isAgentFresh(agent: Agent): boolean {
+  const lastSeen = Date.parse(agent.last_seen);
+  return Number.isFinite(lastSeen) && Date.now() - lastSeen <= STALE_AGENT_MS;
+}
+
 function isAgentAlive(agent: Agent): boolean {
   if (agent.pid !== null) {
-    try {
-      process.kill(agent.pid, 0);
-      return true;
-    } catch {
+    if (!isPidAlive(agent.pid)) {
       removeAgent(agent.id);
       return false;
     }
+
+    if (isAgentFresh(agent)) {
+      return true;
+    }
+
+    log(
+      `removing stale agent ${agent.id} (${agent.name}) because pid ${agent.pid} is alive but last_seen is older than ${STALE_AGENT_MS}ms`
+    );
+    removeAgent(agent.id);
+    return false;
   }
 
-  const lastSeen = Date.parse(agent.last_seen);
-  if (Number.isFinite(lastSeen) && Date.now() - lastSeen <= STALE_AGENT_MS) {
+  if (isAgentFresh(agent)) {
     return true;
   }
 
+  log(
+    `removing stale heartbeat-only agent ${agent.id} (${agent.name}) because last_seen is older than ${STALE_AGENT_MS}ms`
+  );
   removeAgent(agent.id);
   return false;
 }
-
+ 
 const insertAgent = db.prepare(`
   INSERT INTO agents (
     id, pid, name, kind, transport, cwd, git_root, tty, summary,
@@ -665,10 +715,6 @@ const updateSummary = db.prepare(`
 
 const deleteAgent = db.prepare(`
   DELETE FROM agents WHERE id = ?
-`);
-
-const deleteMessagesForAgent = db.prepare(`
-  DELETE FROM messages WHERE to_id = ? OR from_id = ?
 `);
 
 const selectAllAgentRows = db.prepare(`
@@ -702,9 +748,9 @@ const selectMessageRowById = db.prepare(`
 const insertMessage = db.prepare(`
   INSERT INTO messages (
     from_id, to_id, text, sent_at, conversation_id, reply_to_message_id,
-    delivered, delivered_at, surfaced_at, seen_at
+    delivered, delivered_at, surfaced_at, opened_at, seen_at
   )
-  VALUES (?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL)
+  VALUES (?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL)
 `);
 
 const selectUndelivered = db.prepare(`
@@ -723,10 +769,19 @@ const markSurfaced = db.prepare(`
   WHERE id = ? AND to_id = ?
 `);
 
+const markOpened = db.prepare(`
+  UPDATE messages
+  SET
+    surfaced_at = COALESCE(surfaced_at, ?),
+    opened_at = COALESCE(opened_at, ?)
+  WHERE id = ? AND to_id = ?
+`);
+
 const markSeen = db.prepare(`
   UPDATE messages
   SET
     surfaced_at = COALESCE(surfaced_at, ?),
+    opened_at = COALESCE(opened_at, ?),
     seen_at = COALESCE(seen_at, ?)
   WHERE id = ? AND to_id = ?
 `);
@@ -767,7 +822,7 @@ function cleanStaleAgents() {
 }
 
 cleanStaleAgents();
-setInterval(cleanStaleAgents, 30_000);
+setInterval(cleanStaleAgents, CLEANUP_INTERVAL_MS);
 
 function handleRegister(body: RegisterAgentRequest): RegisterAgentResponse {
   const now = new Date().toISOString();
@@ -937,6 +992,7 @@ function handleSendMessage(body: SendMessageRequest): SendMessageResponse {
       delivered: false,
       delivered_at: null,
       surfaced_at: null,
+      opened_at: null,
       seen_at: null,
     },
   };
@@ -999,7 +1055,7 @@ function handleAcknowledgeMessages(
   let updated = 0;
 
   for (const id of ids) {
-    const result = markSeen.run(seenAt, seenAt, id, body.id);
+    const result = markSeen.run(seenAt, seenAt, seenAt, id, body.id);
     updated += normalizeCount(result.changes);
   }
 
@@ -1036,6 +1092,22 @@ function handleMessageHistory(
     )
     .all(...params) as MessageRow[];
 
+  const shouldMarkOpened = normalizeBoolean(body.mark_opened);
+  if (shouldMarkOpened) {
+    const openedAt = new Date().toISOString();
+    for (const row of rows) {
+      if (row.to_id !== body.agent_id) {
+        continue;
+      }
+
+      const result = markOpened.run(openedAt, openedAt, row.id, body.agent_id);
+      if (normalizeCount(result.changes) > 0) {
+        row.surfaced_at = row.surfaced_at ?? openedAt;
+        row.opened_at = row.opened_at ?? openedAt;
+      }
+    }
+  }
+
   return {
     messages: rows.reverse().map(toMessage),
   };
@@ -1065,6 +1137,8 @@ function handleHealth(): BrokerHealthResponse {
     primary_db_path: PRIMARY_DB_PATH,
     db_fallback: DB_FALLBACK,
     schema_version: getSchemaVersion(),
+    stale_agent_ms: STALE_AGENT_MS,
+    cleanup_interval_ms: CLEANUP_INTERVAL_MS,
   };
 }
 

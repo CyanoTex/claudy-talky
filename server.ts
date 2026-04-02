@@ -24,6 +24,11 @@ import {
 import { buildAgentMetadata } from "./shared/agent-metadata.ts";
 import { formatAgent } from "./shared/agent-format.ts";
 import {
+  appendMessageStateLines,
+  conversationIdText,
+  replyToMessageIdValue,
+} from "./shared/message-format.ts";
+import {
   acknowledgeMessagesCompatible,
   brokerFetch,
   listAgentsCompatible,
@@ -37,18 +42,24 @@ import {
   getGitBranch,
   getRecentFiles,
 } from "./shared/summarize.ts";
+import {
+  isPidAlive,
+  shouldWatchParentPid,
+} from "./shared/process-lifecycle.ts";
 import type {
   Agent,
   AgentId,
   Message,
   PollMessagesResponse,
   SendMessageResponse,
+  WhoAmIResponse,
 } from "./shared/types.ts";
 
 const BROKER_PORT = getBrokerPort();
 const BROKER_URL = `http://127.0.0.1:${BROKER_PORT}`;
 const POLL_INTERVAL_MS = 1000;
 const HEARTBEAT_INTERVAL_MS = 15_000;
+const PARENT_WATCH_INTERVAL_MS = 5_000;
 const BROKER_SCRIPT = fileURLToPath(new URL("./broker.ts", import.meta.url));
 
 async function isBrokerAlive(): Promise<boolean> {
@@ -140,29 +151,10 @@ let myCwd = process.cwd();
 let myGitRoot: string | null = null;
 let bufferedInbox: BufferedInboxMessage[] = [];
 let inboxSyncPromise: Promise<void> | null = null;
+let initialSummary = "";
 
 function withAuth<T extends object>(body: T): T & { auth_token?: string } {
   return myAuthToken ? { ...body, auth_token: myAuthToken } : body;
-}
-
-function appendMessageStateLines(lines: string[], message: Message) {
-  lines.push(`Conversation: ${message.conversation_id}`);
-
-  if (message.reply_to_message_id !== null) {
-    lines.push(`Reply to message #${message.reply_to_message_id}`);
-  }
-
-  if (message.delivered_at) {
-    lines.push(`Delivered to inbox at ${message.delivered_at}`);
-  }
-
-  if (message.surfaced_at) {
-    lines.push(`Surfaced to client at ${message.surfaced_at}`);
-  }
-
-  if (message.seen_at) {
-    lines.push(`Marked seen at ${message.seen_at}`);
-  }
 }
 
 function formatBufferedMessage(entry: BufferedInboxMessage): string {
@@ -191,6 +183,20 @@ function formatHistoryMessage(
   return details.join("\n");
 }
 
+function formatWhoAmI(identity: WhoAmIResponse): string {
+  return [
+    "You are currently registered on claudy-talky as:",
+    `- ID: ${identity.id}`,
+    `- Name: ${identity.name}`,
+    `- Kind: ${identity.kind}`,
+    `- Transport: ${identity.transport}`,
+    `- CWD: ${identity.cwd ?? "(none)"}`,
+    `- Git root: ${identity.git_root ?? "(none)"}`,
+    `- TTY: ${identity.tty ?? "(unknown)"}`,
+    `- Summary: ${identity.summary || "(empty)"}`,
+  ].join("\n");
+}
+
 async function listAgentsById(): Promise<Map<AgentId, Agent>> {
   const agents = await listAgentsCompatible(BROKER_URL, {
     scope: "machine",
@@ -214,6 +220,7 @@ IMPORTANT: When you receive a <channel source="claudy-talky" ...> message, RESPO
 Read the from_id, from_name, from_kind, from_summary, and from_cwd attributes to understand who sent the message. Channel metadata also includes message_id, conversation_id, and reply_to_message_id. Reply by calling send_message with their from_id, and use reply_to_message_id or conversation_id when you want to stay in the same thread.
 
 Available tools:
+- whoami: Show your current claudy-talky registration, including your live broker ID
 - list_agents: Discover other connected agents on this machine
 - send_message: Send a message to another agent by ID
 - message_history: Revisit recent messages or a specific conversation
@@ -248,6 +255,15 @@ const LIST_AGENTS_SCHEMA = {
 };
 
 const TOOLS = [
+  {
+    name: "whoami",
+    description:
+      "Show your current claudy-talky registration details, including your live broker ID.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
   {
     name: "list_agents",
     description:
@@ -343,6 +359,46 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   switch (name) {
+    case "whoami": {
+      if (!myId) {
+        return {
+          content: [{ type: "text" as const, text: "Not registered with broker yet" }],
+          isError: true,
+        };
+      }
+
+      const identity: WhoAmIResponse = {
+        id: myId,
+        name: defaultClaudeName(myCwd),
+        kind: "claude-code",
+        transport: "mcp-channel",
+        cwd: myCwd,
+        git_root: myGitRoot,
+        tty: getTty(),
+        summary: initialSummary,
+      };
+
+      try {
+        const byId = await listAgentsById();
+        const registered = byId.get(myId);
+        if (registered) {
+          identity.name = registered.name;
+          identity.kind = registered.kind;
+          identity.transport = registered.transport;
+          identity.cwd = registered.cwd;
+          identity.git_root = registered.git_root;
+          identity.tty = registered.tty;
+          identity.summary = registered.summary;
+        }
+      } catch {
+        // Fall back to local process context.
+      }
+
+      return {
+        content: [{ type: "text" as const, text: formatWhoAmI(identity) }],
+      };
+    }
+
     case "list_agents":
     case "list_peers": {
       const {
@@ -481,6 +537,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
             with_agent_id,
             conversation_id,
             limit,
+            mark_opened: true,
           })
         );
 
@@ -641,6 +698,9 @@ async function syncInbox(notifyClient: boolean) {
     }
 
     for (const entry of arrivals) {
+      const conversationId = conversationIdText(entry.message) ?? "";
+      const replyToMessageId = replyToMessageIdValue(entry.message);
+
       await mcp.notification({
         method: "notifications/claude/channel",
         params: {
@@ -654,11 +714,10 @@ async function syncInbox(notifyClient: boolean) {
             from_cwd: entry.sender?.cwd ?? "",
             sent_at: entry.message.sent_at,
             delivered_at: entry.message.delivered_at ?? "",
-            conversation_id: entry.message.conversation_id,
-            reply_to_message_id:
-              entry.message.reply_to_message_id !== null
-                ? String(entry.message.reply_to_message_id)
-                : "",
+            surfaced_at: entry.message.surfaced_at ?? "",
+            opened_at: entry.message.opened_at ?? "",
+            conversation_id: conversationId,
+            reply_to_message_id: replyToMessageId !== null ? String(replyToMessageId) : "",
           },
         },
       });
@@ -709,7 +768,6 @@ async function main() {
   log(`Git root: ${myGitRoot ?? "(none)"}`);
   log(`TTY: ${tty ?? "(unknown)"}`);
 
-  let initialSummary = "";
   const summaryPromise = (async () => {
     try {
       const branch = await getGitBranch(myCwd);
@@ -793,11 +851,105 @@ async function main() {
     });
   }
 
-  await mcp.connect(new StdioServerTransport());
+  const transport = new StdioServerTransport();
+  let shuttingDown = false;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let parentWatchTimer: ReturnType<typeof setInterval> | null = null;
+  let cleanupPromise: Promise<void> | null = null;
+
+  const clearLifecycleHandles = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+
+    if (parentWatchTimer) {
+      clearInterval(parentWatchTimer);
+      parentWatchTimer = null;
+    }
+
+    process.stdin.off("end", handleStdinEnd);
+    process.stdin.off("close", handleStdinClose);
+    process.off("SIGINT", handleSigint);
+    process.off("SIGTERM", handleSigterm);
+  };
+
+  const cleanup = async (reason: string) => {
+    if (cleanupPromise) {
+      return cleanupPromise;
+    }
+
+    shuttingDown = true;
+    cleanupPromise = (async () => {
+      log(`Shutting down: ${reason}`);
+      clearLifecycleHandles();
+
+      if (myId) {
+        try {
+          await Promise.race([
+            brokerFetch(BROKER_URL, "/unregister", withAuth({ id: myId })),
+            Bun.sleep(1500),
+          ]);
+          log("Unregistered from broker");
+        } catch {
+          // Best effort.
+        }
+      }
+    })();
+
+    await cleanupPromise;
+    process.exit(0);
+  };
+
+  const scheduleCleanup = (reason: string) => {
+    if (!shuttingDown) {
+      void cleanup(reason);
+    }
+  };
+
+  const handleStdinEnd = () => {
+    scheduleCleanup("stdin ended");
+  };
+  const handleStdinClose = () => {
+    scheduleCleanup("stdin closed");
+  };
+  const handleSigint = () => {
+    scheduleCleanup("SIGINT");
+  };
+  const handleSigterm = () => {
+    scheduleCleanup("SIGTERM");
+  };
+
+  mcp.onclose = () => {
+    scheduleCleanup("MCP transport closed");
+  };
+
+  process.stdin.on("end", handleStdinEnd);
+  process.stdin.on("close", handleStdinClose);
+  process.on("SIGINT", handleSigint);
+  process.on("SIGTERM", handleSigterm);
+
+  if (shouldWatchParentPid(process.ppid)) {
+    const parentPid = process.ppid;
+    parentWatchTimer = setInterval(() => {
+      if (!isPidAlive(parentPid)) {
+        scheduleCleanup(`parent process ${parentPid} exited`);
+      }
+    }, PARENT_WATCH_INTERVAL_MS);
+    parentWatchTimer.unref?.();
+  }
+
+  await mcp.connect(transport);
   log("MCP connected");
 
-  const pollTimer = setInterval(pollAndPushMessages, POLL_INTERVAL_MS);
-  const heartbeatTimer = setInterval(async () => {
+  pollTimer = setInterval(pollAndPushMessages, POLL_INTERVAL_MS);
+  heartbeatTimer = setInterval(async () => {
     if (!myId) {
       return;
     }
@@ -808,25 +960,6 @@ async function main() {
       // Best effort.
     }
   }, HEARTBEAT_INTERVAL_MS);
-
-  const cleanup = async () => {
-    clearInterval(pollTimer);
-    clearInterval(heartbeatTimer);
-
-    if (myId) {
-      try {
-        await brokerFetch(BROKER_URL, "/unregister", withAuth({ id: myId }));
-        log("Unregistered from broker");
-      } catch {
-        // Best effort.
-      }
-    }
-
-    process.exit(0);
-  };
-
-  process.on("SIGINT", cleanup);
-  process.on("SIGTERM", cleanup);
 }
 
 main().catch((error) => {

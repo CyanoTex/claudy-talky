@@ -111,6 +111,7 @@ async function poll() {
         from_id: agentId,
         to_id: message.from_id,
         text: `${AGENT_NAME} received: ${message.text}`,
+        reply_to_message_id: message.id,
         auth_token: agentAuthToken ?? undefined,
       });
     } catch (error) {
