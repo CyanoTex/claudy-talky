@@ -981,7 +981,6 @@ async function sendDirectMessage(agentId: string, text: string): Promise<void> {
   }
 
   await refreshAgents();
-  renderAll();
 }
 
 async function sendRoomMessage(room: OperatorRoom, text: string): Promise<void> {
@@ -1043,7 +1042,6 @@ async function sendRoomMessage(room: OperatorRoom, text: string): Promise<void> 
   }
 
   await refreshAgents();
-  renderAll();
 }
 
 async function sendInCurrentContext(text: string): Promise<void> {
@@ -1449,11 +1447,9 @@ async function runCommand(command: OperatorCommand): Promise<void> {
 async function handleComposerSubmit(rawValue: string): Promise<void> {
   const value = rawValue.trim();
   composerValue = "";
-  renderAll();
 
   if (!value) {
     setNotice("Composer cleared.", "warn");
-    renderAll();
     focusPane("composer");
     return;
   }
