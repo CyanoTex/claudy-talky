@@ -93,7 +93,7 @@ Click a room row             Open that room
 Tab / Shift+Tab              Cycle panes, including Actions
 Left / Right                 Move across the Actions strip
 Enter                        Run the selected Action or send composer text
-Esc                          Clear the composer and leave edit mode
+Esc                          Leave edit mode and preserve the current draft
 Ctrl+A                       Jump straight to the Actions strip
 x                            Jump to the Actions strip
 v                            Cycle minimal, compact, and verbose message details

@@ -184,15 +184,17 @@ return `Slash commands:
 /history [limit]
 /context
 /quit
+/exit
 
 Plain text sends to the current DM or room.
 
 Keyboard:
 Tab / Shift+Tab cycle panes
+Ctrl+A jumps straight to the Actions strip
 Left / Right move across the Actions strip
 Enter runs the selected Action or sends the composer text
-Esc clears the composer and leaves edit mode
-Ctrl+A jumps straight to the Actions strip
+Esc leaves edit mode and preserves the current draft
+F10 quits immediately
 x jumps to the Actions strip
 v cycles minimal, compact, and verbose message details
 

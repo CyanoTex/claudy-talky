@@ -116,6 +116,9 @@ test("help text documents the operator slash commands", () => {
   expect(operatorHelpText()).toContain("/leave");
   expect(operatorHelpText()).toContain("/reply");
   expect(operatorHelpText()).toContain("/details [minimal|compact|verbose]");
+  expect(operatorHelpText()).toContain("/exit");
+  expect(operatorHelpText()).toContain("Esc leaves edit mode and preserves the current draft");
+  expect(operatorHelpText()).toContain("F10 quits immediately");
   expect(operatorHelpText()).toContain("v cycles minimal, compact, and verbose message details");
   expect(operatorHelpText()).toContain('/msg "Codex @ claudy-talky" "Need a quick status?"');
   expect(operatorHelpText()).toContain("Plain text sends to the current DM or room.");

@@ -17,6 +17,7 @@ import {
   resolveAgentSelector,
   type AgentRefRecord,
 } from "./shared/operator-agent-ref.ts";
+import { resolveRoomParticipantIds } from "./shared/operator-room.ts";
 import {
   operatorHelpText,
   parseOperatorInput,
@@ -89,7 +90,7 @@ let threadDetailMode: "minimal" | "compact" | "verbose" = "minimal";
 let lastRenderedThreadSignature = "";
 
 const screen = blessed.screen({
-  smartCSR: true,
+  smartCSR: process.platform !== "win32",
   dockBorders: true,
   fullUnicode: true,
   autoPadding: false,
@@ -964,11 +965,13 @@ function renderComposer(): void {
 
 function syncNativeCursorPosition(): void {
   if (!isComposerFocused()) {
+    originalHideCursor();
     return;
   }
 
   const coords = composerInput._getCoords?.();
   if (!coords || typeof coords.xi !== "number" || typeof coords.yi !== "number") {
+    originalHideCursor();
     return;
   }
 
@@ -989,7 +992,6 @@ function renderAll(): void {
   renderRooms();
   renderThread();
   renderComposer();
-  originalHideCursor();
   screen.render();
   syncNativeCursorPosition();
 }
@@ -1291,9 +1293,11 @@ async function loadRoomFromHistory(conversationId: string): Promise<OperatorRoom
     return null;
   }
 
-  const participantIds = Array.from(
-    new Set(history.messages.flatMap((message) => [message.from_id, message.to_id]))
-  ).filter((agentId) => agentId !== myId);
+  const participantIds = resolveRoomParticipantIds(
+    history.messages,
+    myId,
+    agentCache.keys()
+  );
 
   if (participantIds.length === 0) {
     return null;
@@ -1449,14 +1453,6 @@ async function pollInbox(): Promise<void> {
       noteMessageConversation(message);
     }
 
-    await acknowledgeMessagesCompatible(BROKER_URL, {
-      id: myId,
-      message_ids: response.messages.map((message) => message.id),
-      auth_token: authToken,
-    });
-
-    await refreshAgents();
-
     const affectsCurrentContext = response.messages.some(messageBelongsToCurrentContext);
     const newest = response.messages.at(-1);
     if (newest) {
@@ -1466,8 +1462,15 @@ async function pollInbox(): Promise<void> {
     if (affectsCurrentContext) {
       await loadCurrentHistory();
     } else {
+      await refreshAgents();
       renderAll();
     }
+
+    await acknowledgeMessagesCompatible(BROKER_URL, {
+      id: myId,
+      message_ids: response.messages.map((message) => message.id),
+      auth_token: authToken,
+    });
   } catch (error) {
     showError(`Inbox poll failed: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
@@ -1742,6 +1745,14 @@ function wireKeyboardShortcuts(): void {
     });
   });
 
+  screen.key(["f10"], () => {
+    if (helpModalOpen) {
+      return;
+    }
+
+    void shutdown(0);
+  });
+
   screen.key(["a"], () => {
     if (helpModalOpen || isComposerFocused()) {
       return;
@@ -1819,8 +1830,6 @@ function wireKeyboardShortcuts(): void {
     }
 
     if (key.name === "escape") {
-      clearComposerDraft();
-      composerEditing = false;
       focusPane("agents");
       return;
     }
