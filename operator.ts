@@ -31,6 +31,12 @@ import {
 import { parseOperatorInput, type OperatorCommand } from "./shared/operator-command.ts";
 import { resolveRoomParticipantIds } from "./shared/operator-room.ts";
 import {
+  addPendingUnreadEntries,
+  clearPendingUnreadForMessages,
+  countPendingUnreadByAgent,
+  type PendingUnreadEntry,
+} from "./shared/operator-unread.ts";
+import {
   formatWorkDetailLines,
   formatWorkListLine,
 } from "./shared/work-format.ts";
@@ -78,6 +84,7 @@ type State = {
   detailPanel: DetailPanel;
   threadMode: ThreadMode;
   threadScrollOffset: number;
+  pendingUnread: Map<number, PendingUnreadEntry>;
   pollInFlight: boolean;
   shuttingDown: boolean;
 };
@@ -109,6 +116,7 @@ const initialState: State = {
   detailPanel: null,
   threadMode: "minimal",
   threadScrollOffset: 0,
+  pendingUnread: new Map(),
   pollInFlight: false,
   shuttingDown: false,
 };
@@ -243,8 +251,9 @@ function Panel(props: {
 }
 
 function sortedAgents(state: State): Agent[] {
+  const unreadByAgent = countPendingUnreadByAgent(state.pendingUnread);
   return [...state.agentCache.values()].sort((left, right) => {
-    const unreadDelta = right.unread_count - left.unread_count;
+    const unreadDelta = (unreadByAgent.get(right.id) ?? 0) - (unreadByAgent.get(left.id) ?? 0);
     if (unreadDelta !== 0) return unreadDelta;
     return left.name.localeCompare(right.name);
   });
@@ -344,7 +353,14 @@ function App(): ReactElement {
     else request.conversation_id = current.currentContext.conversationId;
     const history = await messageHistoryCompatible(BROKER_URL, request);
     await refreshAgents();
-    updateState((prev) => ({ ...prev, currentMessages: sortMessages(history.messages), currentLimit: limit, detailPanel: null, threadScrollOffset: 0 }));
+    updateState((prev) => ({
+      ...prev,
+      currentMessages: sortMessages(history.messages),
+      currentLimit: limit,
+      detailPanel: null,
+      threadScrollOffset: 0,
+      pendingUnread: clearPendingUnreadForMessages(prev.pendingUnread, prev.myId, history.messages),
+    }));
   }, [refreshAgents, updateState]);
 
   const showDetail = useCallback((title: string, lines: string[]) => {
@@ -786,6 +802,9 @@ function App(): ReactElement {
       );
       const nextDmConversations = new Map(prev.dmConversations);
       nextDmConversations.delete(agentId);
+      const nextPendingUnread = new Map(
+        [...prev.pendingUnread.entries()].filter(([, entry]) => entry.fromId !== agentId)
+      );
 
       const nextState: State = {
         ...prev,
@@ -793,6 +812,7 @@ function App(): ReactElement {
         agentRefs: nextAgentRefs,
         rooms: nextRooms,
         dmConversations: nextDmConversations,
+        pendingUnread: nextPendingUnread,
         selectedAgentId:
           prev.selectedAgentId === agentId
             ? nextAgentRefs[0]?.agent.id ?? null
@@ -929,6 +949,31 @@ function App(): ReactElement {
         }
       }
       const ctx = stateRef.current.currentContext;
+      const trackableUnread = response.messages
+        .filter((message) => message.to_id === stateRef.current.myId && message.from_id !== stateRef.current.myId)
+        .filter((message) =>
+          ctx.kind === "room"
+            ? message.conversation_id !== ctx.conversationId
+            : ctx.kind === "dm"
+              ? !(
+                  (message.from_id === ctx.agentId && message.to_id === stateRef.current.myId) ||
+                  (message.from_id === stateRef.current.myId && message.to_id === ctx.agentId)
+                )
+              : true
+        )
+        .map((message) => ({
+          messageId: message.id,
+          fromId: message.from_id,
+          conversationId: message.conversation_id,
+        }));
+
+      if (trackableUnread.length > 0) {
+        updateState((prev) => ({
+          ...prev,
+          pendingUnread: addPendingUnreadEntries(prev.pendingUnread, trackableUnread),
+        }));
+      }
+
       const affectsCurrent =
         ctx.kind === "room"
           ? response.messages.some((message) => message.conversation_id === ctx.conversationId)
@@ -1066,6 +1111,7 @@ function App(): ReactElement {
   }, [size]);
 
   const agentRows = useMemo(() => {
+    const unreadByAgent = countPendingUnreadByAgent(state.pendingUnread);
     const rows = sortedAgents(state);
     const index = Math.max(0, rows.findIndex((row) => row.id === state.selectedAgentId));
     const visibleRows: { id: string; text: string; selected: boolean }[] =
@@ -1074,7 +1120,7 @@ function App(): ReactElement {
         : windowAround(
             rows.map((agent) => ({
               id: agent.id,
-              text: `${participantRef(agent.id) ?? agent.id}${agent.unread_count > 0 ? ` [${agent.unread_count}]` : ""} ${agent.name}`,
+              text: `${participantRef(agent.id) ?? agent.id}${(unreadByAgent.get(agent.id) ?? 0) > 0 ? ` [${unreadByAgent.get(agent.id)}]` : ""} ${agent.name}`,
               selected: agent.id === state.selectedAgentId,
             })),
             index,
