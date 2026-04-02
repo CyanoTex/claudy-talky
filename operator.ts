@@ -82,7 +82,7 @@ let composerEditing = false;
 let composerValue = "";
 let swallowNextComposerKeypress = false;
 let selectedActionIndex = 0;
-let threadDetailMode: "compact" | "verbose" = "compact";
+let threadDetailMode: "minimal" | "compact" | "verbose" = "minimal";
 let lastRenderedThreadSignature = "";
 
 const screen = blessed.screen({
@@ -493,7 +493,32 @@ function sortMessagesChronologically(messages: Message[]): Message[] {
   });
 }
 
+function cycleThreadDetailMode(): void {
+  threadDetailMode =
+    threadDetailMode === "minimal"
+      ? "compact"
+      : threadDetailMode === "compact"
+        ? "verbose"
+        : "minimal";
+}
+
+function formatThreadTimestamp(sentAt: string): string {
+  const date = new Date(sentAt);
+  if (Number.isNaN(date.getTime())) {
+    return sentAt;
+  }
+
+  return date.toISOString().slice(0, 19).replace("T", " ");
+}
+
 function formatMessageForThread(message: Message): string {
+  if (threadDetailMode === "minimal") {
+    return [
+      `[${formatThreadTimestamp(message.sent_at)}]`,
+      ...message.text.split(/\r?\n/),
+    ].join("\n");
+  }
+
   const room = roomForConversation(message.conversation_id);
   const header = `[${message.sent_at}] #${message.id} ${participantDisplay(message.from_id)} -> ${participantDisplay(message.to_id)}${
     room ? ` [room:${room.name}]` : ""
@@ -1350,8 +1375,11 @@ async function runCommand(command: OperatorCommand): Promise<void> {
       await switchReplyContext();
       return;
     case "details":
-      threadDetailMode =
-        command.mode ?? (threadDetailMode === "compact" ? "verbose" : "compact");
+      if (command.mode) {
+        threadDetailMode = command.mode;
+      } else {
+        cycleThreadDetailMode();
+      }
       setNotice(`Message details: ${threadDetailMode}.`);
       renderAll();
       return;
@@ -1599,7 +1627,7 @@ function wireKeyboardShortcuts(): void {
       return;
     }
 
-    threadDetailMode = threadDetailMode === "compact" ? "verbose" : "compact";
+    cycleThreadDetailMode();
     setNotice(`Message details: ${threadDetailMode}.`);
     renderAll();
   });

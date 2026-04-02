@@ -31,6 +31,11 @@ test("parses DM and room slash commands", () => {
     kind: "details",
   });
 
+  expect(parseOperatorInput("/details minimal")).toEqual({
+    kind: "details",
+    mode: "minimal",
+  });
+
   expect(parseOperatorInput("/details verbose")).toEqual({
     kind: "details",
     mode: "verbose",
@@ -91,7 +96,7 @@ test("rejects invalid room and history usage", () => {
 
   expect(parseOperatorInput("/details loud")).toEqual({
     kind: "error",
-    message: "Usage: /details [compact|verbose]",
+    message: "Usage: /details [minimal|compact|verbose]",
   });
 
   expect(parseOperatorInput("/msg claude")).toEqual({
@@ -110,8 +115,8 @@ test("help text documents the operator slash commands", () => {
   expect(operatorHelpText()).toContain("/msg <agent-ref-or-name> <message>");
   expect(operatorHelpText()).toContain("/leave");
   expect(operatorHelpText()).toContain("/reply");
-  expect(operatorHelpText()).toContain("/details [compact|verbose]");
-  expect(operatorHelpText()).toContain("v toggles compact vs verbose message details");
+  expect(operatorHelpText()).toContain("/details [minimal|compact|verbose]");
+  expect(operatorHelpText()).toContain("v cycles minimal, compact, and verbose message details");
   expect(operatorHelpText()).toContain('/msg "Codex @ claudy-talky" "Need a quick status?"');
   expect(operatorHelpText()).toContain("Plain text sends to the current DM or room.");
 });
