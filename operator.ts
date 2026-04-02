@@ -92,6 +92,31 @@ const screen = blessed.screen({
   title: "claudy-talky operator",
 });
 
+const originalShowCursor = screen.program.showCursor.bind(screen.program);
+const originalHideCursor = screen.program.hideCursor.bind(screen.program);
+let allowHardwareCursor = false;
+
+function lockHardwareCursor(): void {
+  screen.program.showCursor = () => {
+    if (allowHardwareCursor) {
+      return originalShowCursor();
+    }
+
+    return originalHideCursor();
+  };
+  screen.program.cursorShape?.("block", false);
+  originalHideCursor();
+}
+
+function unlockHardwareCursor(): void {
+  allowHardwareCursor = true;
+  screen.program.showCursor = originalShowCursor;
+  screen.program.hideCursor = originalHideCursor;
+  originalShowCursor();
+}
+
+lockHardwareCursor();
+
 const titleBar = blessed.box({
   parent: screen,
   top: 0,
@@ -1375,6 +1400,7 @@ async function shutdown(code: number): Promise<never> {
     }
   }
 
+  unlockHardwareCursor();
   screen.destroy();
   exit(code);
 }
