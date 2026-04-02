@@ -329,6 +329,51 @@ const composer = blessed.box({
   },
 });
 
+const composerPrompt = blessed.box({
+  parent: composer,
+  top: 0,
+  left: 0,
+  width: 2,
+  height: 1,
+  tags: false,
+  content: "> ",
+  style: {
+    fg: "white",
+    bg: "black",
+    bold: true,
+  },
+});
+
+const composerInput = blessed.box({
+  parent: composer,
+  top: 0,
+  left: 2,
+  width: "100%-2",
+  height: 1,
+  tags: false,
+  content: "",
+  style: {
+    fg: "white",
+    bg: "black",
+  },
+});
+
+const composerCursor = blessed.box({
+  parent: composerInput,
+  top: 0,
+  left: 0,
+  width: 1,
+  height: 1,
+  tags: false,
+  hidden: true,
+  content: "|",
+  style: {
+    fg: "yellow",
+    bg: "black",
+    bold: true,
+  },
+});
+
 const modal = blessed.scrollablebox({
   parent: screen,
   hidden: true,
@@ -810,46 +855,36 @@ function renderThread(): void {
 }
 
 function renderComposer(): void {
-  const prompt = "> ";
-  const innerWidth =
-    typeof composer.width === "number" && typeof composer.ileft === "number" && typeof composer.iright === "number"
-      ? Math.max(8, composer.width - composer.ileft - composer.iright - prompt.length - 1)
-      : 80;
+  const inputCoords = composerInput._getCoords?.();
+  const inputWidth =
+    inputCoords && typeof inputCoords.xl === "number" && typeof inputCoords.xi === "number"
+      ? Math.max(1, inputCoords.xl - inputCoords.xi + 1)
+      : typeof screen.width === "number"
+        ? Math.max(8, Math.floor(screen.width) - 6)
+        : 80;
+  const cursorVisible = isComposerFocused();
+  const maxVisibleTextWidth = cursorVisible ? Math.max(0, inputWidth - 1) : inputWidth;
   const visibleValue =
-    composerValue.length > innerWidth
-      ? composerValue.slice(composerValue.length - innerWidth)
+    composerValue.length > maxVisibleTextWidth
+      ? composerValue.slice(composerValue.length - maxVisibleTextWidth)
       : composerValue;
+  const paddedValue =
+    inputWidth > 0 ? visibleValue.padEnd(inputWidth, " ") : visibleValue;
 
   composer.setLabel(
     ` Composer | ${contextLabel()}${composerEditing ? " | editing" : ""} `
   );
-  composer.setContent(`${prompt}${visibleValue}`);
-}
+  composerPrompt.setContent("> ");
+  composerInput.setContent(paddedValue);
 
-function syncComposerCursor(): void {
-  if (!isComposerFocused()) {
-    originalHideCursor();
+  if (!cursorVisible || inputWidth <= 0) {
+    composerCursor.hide();
     return;
   }
 
-  const coords = composer._getCoords?.();
-  if (!coords) {
-    originalHideCursor();
-    return;
-  }
-
-  const prompt = "> ";
-  const innerWidth =
-    typeof composer.width === "number" && typeof composer.ileft === "number" && typeof composer.iright === "number"
-      ? Math.max(8, composer.width - composer.ileft - composer.iright - prompt.length - 1)
-      : 80;
-  const visibleLength = Math.min(composerValue.length, innerWidth);
-  const cursorX = coords.xi + composer.ileft + prompt.length + visibleLength;
-  const cursorY = coords.yi + composer.itop;
-
-  screen.program.cursorShape?.("line", false);
-  screen.program.cup(cursorY, cursorX);
-  screen.program.showCursor();
+  const cursorOffset = Math.min(visibleValue.length, Math.max(0, inputWidth - 1));
+  composerCursor.left = cursorOffset;
+  composerCursor.show();
 }
 
 function renderAll(): void {
@@ -862,7 +897,6 @@ function renderAll(): void {
   renderComposer();
   originalHideCursor();
   screen.render();
-  syncComposerCursor();
 }
 
 function moveSelectedAction(direction: 1 | -1): void {
