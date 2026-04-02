@@ -9,6 +9,11 @@ import {
 import { buildAgentMetadata } from "./agent-metadata.ts";
 import { formatAgent } from "./agent-format.ts";
 import {
+  appendMessageStateLines,
+  conversationIdText,
+  replyToMessageIdValue,
+} from "./message-format.ts";
+import {
   acknowledgeMessagesCompatible,
   brokerFetch,
   listAgentsCompatible,
@@ -32,6 +37,7 @@ import type {
   Message,
   PollMessagesResponse,
   SendMessageResponse,
+  WhoAmIResponse,
 } from "./types.ts";
 import { resolveWorkspaceCwdFromRootUris } from "./workspace.ts";
 
@@ -166,26 +172,6 @@ function defaultAgentName(label: string, cwd: string): string {
   return leaf ? `${label} @ ${leaf}` : label;
 }
 
-function appendMessageStateLines(lines: string[], message: Message) {
-  lines.push(`Conversation: ${message.conversation_id}`);
-
-  if (message.reply_to_message_id !== null) {
-    lines.push(`Reply to message #${message.reply_to_message_id}`);
-  }
-
-  if (message.delivered_at) {
-    lines.push(`Delivered to inbox at ${message.delivered_at}`);
-  }
-
-  if (message.surfaced_at) {
-    lines.push(`Surfaced to client at ${message.surfaced_at}`);
-  }
-
-  if (message.seen_at) {
-    lines.push(`Marked seen at ${message.seen_at}`);
-  }
-}
-
 function formatBufferedMessage(entry: BufferedInboxMessage): string {
   const { message, sender } = entry;
   const label = sender
@@ -205,10 +191,14 @@ function formatInboxNotification(entry: BufferedInboxMessage): string {
   const details: string[] = [header, "", message.text];
 
   details.push("", `Message ID: ${message.id}`);
-  details.push("", `Conversation: ${message.conversation_id}`);
+  const conversationId = conversationIdText(message);
+  if (conversationId) {
+    details.push("", `Conversation: ${conversationId}`);
+  }
 
-  if (message.reply_to_message_id !== null) {
-    details.push(`Reply to message #${message.reply_to_message_id}`);
+  const replyToMessageId = replyToMessageIdValue(message);
+  if (replyToMessageId !== null) {
+    details.push(`Reply to message #${replyToMessageId}`);
   }
 
   if (sender?.summary) {
@@ -243,6 +233,20 @@ function formatHistoryMessage(
   const details = [`Message #${message.id} ${direction} at ${message.sent_at}:`, message.text];
   appendMessageStateLines(details, message);
   return details.join("\n");
+}
+
+function formatWhoAmI(identity: WhoAmIResponse): string {
+  return [
+    "You are currently registered on claudy-talky as:",
+    `- ID: ${identity.id}`,
+    `- Name: ${identity.name}`,
+    `- Kind: ${identity.kind}`,
+    `- Transport: ${identity.transport}`,
+    `- CWD: ${identity.cwd ?? "(none)"}`,
+    `- Git root: ${identity.git_root ?? "(none)"}`,
+    `- TTY: ${identity.tty ?? "(unknown)"}`,
+    `- Summary: ${identity.summary || "(empty)"}`,
+  ].join("\n");
 }
 
 async function resolveWorkspaceCwd(
@@ -289,6 +293,7 @@ export async function runPollingAdapter(
   let bufferedInbox: BufferedInboxMessage[] = [];
   let inboxSyncPromise: Promise<void> | null = null;
   let desktopNotificationWarningLogged = false;
+  let initialSummary = "";
 
   const desktopNotifications =
     options.enableDesktopNotifications ?? desktopNotificationsEnabled();
@@ -306,6 +311,15 @@ export async function runPollingAdapter(
   ];
 
   const tools = [
+    {
+      name: "whoami",
+      description:
+        "Show your current claudy-talky registration details, including your live broker ID.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {},
+      },
+    },
     {
       name: "list_agents",
       description:
@@ -506,6 +520,46 @@ export async function runPollingAdapter(
     const { name, arguments: args } = request.params;
 
     switch (name) {
+      case "whoami": {
+        if (!myId) {
+          return {
+            content: [{ type: "text" as const, text: "Not registered with broker yet" }],
+            isError: true,
+          };
+        }
+
+        const identity: WhoAmIResponse = {
+          id: myId,
+          name: defaultAgentName(options.agentLabel, myCwd),
+          kind: options.agentKind,
+          transport: options.agentTransport ?? "mcp-stdio",
+          cwd: myCwd,
+          git_root: myGitRoot,
+          tty: getTty(),
+          summary: initialSummary,
+        };
+
+        try {
+          const byId = await listAgentsById();
+          const registered = byId.get(myId);
+          if (registered) {
+            identity.name = registered.name;
+            identity.kind = registered.kind;
+            identity.transport = registered.transport;
+            identity.cwd = registered.cwd;
+            identity.git_root = registered.git_root;
+            identity.tty = registered.tty;
+            identity.summary = registered.summary;
+          }
+        } catch {
+          // Fall back to local process context.
+        }
+
+        return {
+          content: [{ type: "text" as const, text: formatWhoAmI(identity) }],
+        };
+      }
+
       case "list_agents":
       case "list_peers": {
         const {
@@ -644,6 +698,7 @@ export async function runPollingAdapter(
               with_agent_id,
               conversation_id,
               limit,
+              mark_opened: true,
             })
           );
 
@@ -781,7 +836,6 @@ export async function runPollingAdapter(
   log(`Git root: ${myGitRoot ?? "(none)"}`);
   log(`TTY: ${tty ?? "(unknown)"}`);
 
-  let initialSummary = "";
   const summaryPromise = (async () => {
     try {
       const branch = await getGitBranch(myCwd);

@@ -32,6 +32,7 @@ export interface Message {
   delivered: boolean;
   delivered_at: string | null;
   surfaced_at: string | null;
+  opened_at: string | null;
   seen_at: string | null;
 }
 
@@ -124,6 +125,7 @@ export interface MessageHistoryRequest {
   with_agent_id?: AgentId;
   conversation_id?: string;
   limit?: number;
+  mark_opened?: boolean;
   auth_token?: string;
 }
 
@@ -134,6 +136,15 @@ export interface MessageHistoryResponse {
 export interface UnregisterRequest {
   id: AgentId;
   auth_token?: string;
+}
+
+export interface RemoveAgentAdminRequest {
+  id: AgentId;
+}
+
+export interface RemoveAgentAdminResponse {
+  ok: boolean;
+  removed: boolean;
 }
 
 export interface BrokerHealthResponse {
@@ -147,6 +158,19 @@ export interface BrokerHealthResponse {
   primary_db_path: string;
   db_fallback: boolean;
   schema_version: number;
+  stale_agent_ms: number;
+  cleanup_interval_ms: number;
+}
+
+export interface WhoAmIResponse {
+  id: AgentId;
+  name: string;
+  kind: string;
+  transport: string;
+  cwd: string | null;
+  git_root: string | null;
+  tty: string | null;
+  summary: string;
 }
 
 // Legacy aliases so older integrations can continue compiling against the

@@ -76,6 +76,9 @@ switch (command) {
       console.log(`Schema: v${health.schema_version}`);
       console.log(`DB: ${health.db_path}${health.db_fallback ? ` (fallback from ${health.primary_db_path})` : ""}`);
       console.log(
+        `Cleanup: stale after ${health.stale_agent_ms}ms, sweep every ${health.cleanup_interval_ms}ms`
+      );
+      console.log(
         `Messages: ${health.unread_messages} unread, ${health.undelivered_messages} pending delivery`
       );
 

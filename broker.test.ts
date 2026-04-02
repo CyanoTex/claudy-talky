@@ -148,6 +148,7 @@ test("registers agents, tracks threaded history, and separates surfaced from see
       delivered: boolean;
       delivered_at: string | null;
       surfaced_at: string | null;
+      opened_at: string | null;
       seen_at: string | null;
     };
   }>("/send-message", {
@@ -165,6 +166,7 @@ test("registers agents, tracks threaded history, and separates surfaced from see
   expect(sent.message?.delivered).toBe(false);
   expect(sent.message?.delivered_at).toBeNull();
   expect(sent.message?.surfaced_at).toBeNull();
+  expect(sent.message?.opened_at).toBeNull();
   expect(sent.message?.seen_at).toBeNull();
 
   const queuedAgents = await brokerFetch<
@@ -196,6 +198,7 @@ test("registers agents, tracks threaded history, and separates surfaced from see
       delivered: boolean;
       delivered_at: string | null;
       surfaced_at: string | null;
+      opened_at: string | null;
       seen_at: string | null;
     }>;
   }>("/poll-messages", {
@@ -213,7 +216,28 @@ test("registers agents, tracks threaded history, and separates surfaced from see
   expect(polled.messages[0]?.delivered).toBe(true);
   expect(polled.messages[0]?.delivered_at).not.toBeNull();
   expect(polled.messages[0]?.surfaced_at).toBeNull();
+  expect(polled.messages[0]?.opened_at).toBeNull();
   expect(polled.messages[0]?.seen_at).toBeNull();
+
+  const openedHistory = await brokerFetch<{
+    messages: Array<{
+      id: number;
+      surfaced_at: string | null;
+      opened_at: string | null;
+      seen_at: string | null;
+    }>;
+  }>("/message-history", {
+    agent_id: custom.id,
+    with_agent_id: claude.id,
+    mark_opened: true,
+    auth_token: custom.auth_token,
+  });
+
+  expect(openedHistory.messages).toHaveLength(1);
+  expect(openedHistory.messages[0]?.id).toBe(sent.message?.id);
+  expect(openedHistory.messages[0]?.surfaced_at).not.toBeNull();
+  expect(openedHistory.messages[0]?.opened_at).not.toBeNull();
+  expect(openedHistory.messages[0]?.seen_at).toBeNull();
 
   const deliveredAgents = await brokerFetch<
     Array<{
@@ -231,7 +255,7 @@ test("registers agents, tracks threaded history, and separates surfaced from see
   expect(deliveredCustom?.unread_count).toBe(1);
   expect(deliveredCustom?.undelivered_count).toBe(0);
   expect(deliveredCustom?.delivered_unseen_count).toBe(1);
-  expect(deliveredCustom?.surfaced_unseen_count).toBe(0);
+  expect(deliveredCustom?.surfaced_unseen_count).toBe(1);
 
   const surfaced = await brokerFetch<{ ok: boolean; updated: number }>(
     "/mark-messages-surfaced",
@@ -382,13 +406,17 @@ test("registers agents, tracks threaded history, and separates surfaced from see
     undelivered_messages: number;
     surfaced_unseen_messages: number;
     schema_version: number;
+    stale_agent_ms: number;
+    cleanup_interval_ms: number;
   }>("/health");
 
   expect(health.status).toBe("ok");
   expect(health.unread_messages).toBe(0);
   expect(health.undelivered_messages).toBe(0);
   expect(health.surfaced_unseen_messages).toBe(0);
-  expect(health.schema_version).toBe(4);
+  expect(health.schema_version).toBe(5);
+  expect(health.stale_agent_ms).toBe(10000);
+  expect(health.cleanup_interval_ms).toBe(5000);
 });
 
 test("rejects spoofed agent actions without the correct auth token", async () => {
@@ -425,4 +453,161 @@ test("rejects spoofed agent actions without the correct auth token", async () =>
   expect(response.status).toBe(403);
   const payload = (await response.json()) as { error?: string };
   expect(payload.error).toContain("invalid auth token");
+});
+
+test("preserves message history when a sender unregisters", async () => {
+  const sender = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Ephemeral Sender",
+      kind: "custom-http-agent",
+      transport: "http-poll",
+    }
+  );
+
+  const receiver = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Persistent Receiver",
+      kind: "custom-http-agent",
+      transport: "http-poll",
+    }
+  );
+
+  const sent = await brokerFetch<{
+    ok: boolean;
+    message?: {
+      id: number;
+      from_id: string;
+      to_id: string;
+      text: string;
+      conversation_id: string;
+    };
+  }>("/send-message", {
+    from_id: sender.id,
+    to_id: receiver.id,
+    text: "This should survive sender unregister.",
+    auth_token: sender.auth_token,
+  });
+
+  expect(sent.ok).toBe(true);
+  expect(sent.message?.from_id).toBe(sender.id);
+  expect(sent.message?.to_id).toBe(receiver.id);
+
+  await brokerFetch<{ ok: boolean }>("/unregister", {
+    id: sender.id,
+    auth_token: sender.auth_token,
+  });
+
+  const polled = await brokerFetch<{
+    messages: Array<{
+      id: number;
+      from_id: string;
+      to_id: string;
+      text: string;
+      conversation_id: string;
+    }>;
+  }>("/poll-messages", {
+    id: receiver.id,
+    auth_token: receiver.auth_token,
+  });
+
+  expect(polled.messages).toHaveLength(1);
+  expect(polled.messages[0]?.id).toBe(sent.message?.id);
+  expect(polled.messages[0]?.from_id).toBe(sender.id);
+  expect(polled.messages[0]?.to_id).toBe(receiver.id);
+  expect(polled.messages[0]?.text).toBe("This should survive sender unregister.");
+  expect(polled.messages[0]?.conversation_id).toBe(sent.message?.conversation_id);
+
+  const history = await brokerFetch<{
+    messages: Array<{
+      id: number;
+      from_id: string;
+      to_id: string;
+      text: string;
+    }>;
+  }>("/message-history", {
+    agent_id: receiver.id,
+    with_agent_id: sender.id,
+    auth_token: receiver.auth_token,
+  });
+
+  expect(history.messages).toHaveLength(1);
+  expect(history.messages[0]?.id).toBe(sent.message?.id);
+  expect(history.messages[0]?.from_id).toBe(sender.id);
+  expect(history.messages[0]?.to_id).toBe(receiver.id);
+  expect(history.messages[0]?.text).toBe("This should survive sender unregister.");
+});
+
+test("re-registering the same parent session replaces the older broker row", async () => {
+  const first = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Antigravity @ Antigravity",
+      kind: "google-antigravity",
+      transport: "mcp-stdio",
+      cwd: "C:/Users/Cyano/AppData/Local/Programs/Antigravity",
+      metadata: {
+        client: "Antigravity",
+        launcher: "vscode",
+        parent_pid: 424242,
+      },
+    }
+  );
+
+  const second = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Antigravity @ Antigravity",
+      kind: "google-antigravity",
+      transport: "mcp-stdio",
+      cwd: "C:/Users/Cyano/AppData/Local/Programs/Antigravity",
+      metadata: {
+        client: "Antigravity",
+        launcher: "vscode",
+        parent_pid: 424242,
+      },
+    }
+  );
+
+  expect(second.id).not.toBe(first.id);
+
+  const agents = await brokerFetch<Array<{ id: string; name: string; kind: string }>>(
+    "/list-agents",
+    {
+      scope: "machine",
+      kind: "google-antigravity",
+    }
+  );
+
+  expect(agents.map((agent) => agent.id)).toContain(second.id);
+  expect(agents.map((agent) => agent.id)).not.toContain(first.id);
+  expect(agents).toHaveLength(1);
+});
+
+test("admin removal deletes an agent row without the agent auth token", async () => {
+  const target = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Stale UI Target",
+      kind: "custom-http-agent",
+      transport: "http-poll",
+    }
+  );
+
+  const removed = await brokerFetch<{ ok: boolean; removed: boolean }>(
+    "/admin-remove-agent",
+    {
+      id: target.id,
+    }
+  );
+
+  expect(removed.ok).toBe(true);
+  expect(removed.removed).toBe(true);
+
+  const agents = await brokerFetch<Array<{ id: string }>>("/list-agents", {
+    scope: "machine",
+  });
+
+  expect(agents.some((agent) => agent.id === target.id)).toBe(false);
 });

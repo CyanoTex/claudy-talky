@@ -93,6 +93,10 @@ export function buildAgentMetadata(
     runtime_version: Bun.version,
   };
 
+  if (Number.isInteger(process.ppid) && process.ppid > 0) {
+    metadata.parent_pid = process.ppid;
+  }
+
   const clientVersion = normalizeText(options.clientVersion);
   if (clientVersion) {
     metadata.client_version = clientVersion;

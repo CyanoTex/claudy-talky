@@ -1,14 +1,12 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { getBrokerLockPath } from "./shared/config.ts";
 
-const port = 20000 + Math.floor(Math.random() * 1000);
-const dbPath = join(process.cwd(), `.broker-lock-${port}.sqlite`);
+const port = 21000 + Math.floor(Math.random() * 1000);
+const dbPath = join(process.cwd(), `.broker-stale-${port}.sqlite`);
 const brokerUrl = `http://127.0.0.1:${port}`;
-const lockPath = getBrokerLockPath(port);
 
-let primaryBroker: ReturnType<typeof Bun.spawn>;
+let brokerProcess: ReturnType<typeof Bun.spawn>;
 
 async function waitForBroker() {
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -45,7 +43,7 @@ async function brokerFetch<T>(path: string, body?: unknown): Promise<T> {
 }
 
 beforeAll(async () => {
-  primaryBroker = Bun.spawn(["bun", "broker.ts"], {
+  brokerProcess = Bun.spawn(["bun", "broker.ts"], {
     cwd: process.cwd(),
     stdout: "ignore",
     stderr: "ignore",
@@ -53,7 +51,8 @@ beforeAll(async () => {
       ...process.env,
       CLAUDY_TALKY_PORT: String(port),
       CLAUDY_TALKY_DB: dbPath,
-      CLAUDY_TALKY_STALE_AGENT_MS: "10000",
+      CLAUDY_TALKY_STALE_AGENT_MS: "500",
+      CLAUDY_TALKY_CLEANUP_INTERVAL_MS: "100",
     },
   });
 
@@ -67,7 +66,7 @@ afterAll(async () => {
     // Best effort.
   }
 
-  await primaryBroker.exited;
+  await brokerProcess.exited;
 
   for (const suffix of ["", "-shm", "-wal"]) {
     const path = `${dbPath}${suffix}`;
@@ -75,44 +74,34 @@ afterAll(async () => {
       rmSync(path, { force: true });
     }
   }
-
-  rmSync(lockPath, { force: true });
 });
 
-test("exits quickly when another broker already owns the startup lock", async () => {
-  const competingBroker = Bun.spawn(["bun", "broker.ts"], {
-    cwd: process.cwd(),
-    stdout: "ignore",
-    stderr: "pipe",
-    env: {
-      ...process.env,
-      CLAUDY_TALKY_PORT: String(port),
-      CLAUDY_TALKY_DB: dbPath,
-      CLAUDY_TALKY_STALE_AGENT_MS: "10000",
-    },
-  });
+test("removes pid-backed agents when their heartbeat goes stale", async () => {
+  const registered = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Stale PID Agent",
+      kind: "custom-http-agent",
+      transport: "http-poll",
+      pid: process.pid,
+      summary: "Used to verify stale cleanup.",
+    }
+  );
 
-  const exitCode = await Promise.race([
-    competingBroker.exited,
-    Bun.sleep(3000).then(() => {
-      throw new Error("Competing broker did not exit");
-    }),
-  ]);
+  expect(typeof registered.id).toBe("string");
 
-  const stderr = await new Response(competingBroker.stderr).text();
+  let agents: Array<{ id: string }> = [];
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    agents = await brokerFetch<Array<{ id: string }>>("/list-agents", {
+      scope: "machine",
+    });
 
-  expect(exitCode).not.toBe(0);
-  expect(stderr).toContain("startup lock");
-  expect(existsSync(lockPath)).toBe(true);
+    if (!agents.some((agent) => agent.id === registered.id)) {
+      break;
+    }
 
-  const health = await brokerFetch<{
-    status: string;
-    schema_version: number;
-  }>("/health");
+    await Bun.sleep(100);
+  }
 
-  expect(health.status).toBe("ok");
-  expect(health.schema_version).toBe(5);
-
-  const lockContents = readFileSync(lockPath, "utf8");
-  expect(lockContents).toContain(`"port":${port}`);
+  expect(agents.some((agent) => agent.id === registered.id)).toBe(false);
 });
