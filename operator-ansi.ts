@@ -111,7 +111,9 @@ let threadDetailMode: ThreadDetailMode = "minimal";
 let lastRenderedThreadSignature = "";
 let threadScrollOffset = 0;
 let selectedActionIndex = 0;
-let statusBarHint = "Tab cycles panes. Left/Right moves Actions. Type in composer. Enter submits or opens.";
+let statusBarHint = "Tab cycles panes. Ctrl+A focuses Actions. Type in composer. Enter submits or opens.";
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const actions: OperatorAction[] = [
   { label: "DM selected", shortcut: "D", handler: () => openSelectedAgent() },
@@ -1371,13 +1373,26 @@ async function shutdown(code: number): Promise<never> {
   }
 
   shuttingDown = true;
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
 
   if (myId) {
     try {
-      await brokerPost<{ ok: boolean }>("/unregister", {
-        id: myId,
-        auth_token: authToken,
-      } satisfies UnregisterRequest);
+      await Promise.race([
+        brokerPost<{ ok: boolean }>("/unregister", {
+          id: myId,
+          auth_token: authToken,
+        } satisfies UnregisterRequest),
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 400);
+        }),
+      ]);
     } catch {
       // Best effort.
     }
@@ -1388,13 +1403,11 @@ async function shutdown(code: number): Promise<never> {
 }
 
 function cycleFocus(direction: 1 | -1): void {
-  const panes: FocusPane[] = ["actions", "agents", "rooms", "thread", "composer"];
+  const panes: FocusPane[] = ["agents", "rooms", "thread", "composer"];
   const currentIndex = panes.indexOf(activePane);
-  const nextIndex = (currentIndex + direction + panes.length) % panes.length;
+  const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+  const nextIndex = (baseIndex + direction + panes.length) % panes.length;
   activePane = panes[nextIndex]!;
-  if (activePane === "actions") {
-    setNotice("Actions focused. Use Left/Right to choose an action and Enter to run it.");
-  }
   renderAll();
 }
 
@@ -1489,6 +1502,11 @@ async function handleKeypress(ch: string, key: Keypress): Promise<void> {
     return;
   }
 
+  if (key.name === "f10") {
+    await shutdown(0);
+    return;
+  }
+
   if (key.ctrl && key.name === "a") {
     activePane = "actions";
     setNotice("Actions focused. Use Left/Right to choose an action and Enter to run it.");
@@ -1497,24 +1515,20 @@ async function handleKeypress(ch: string, key: Keypress): Promise<void> {
   }
 
   if (activePane !== "composer") {
-    if (key.name === "a") {
-      activePane = "agents";
-      renderAll();
+    if (key.name === "d") {
+      await openSelectedAgent();
+      return;
+    }
+    if (key.name === "o") {
+      await openSelectedRoom();
       return;
     }
     if (key.name === "r") {
-      activePane = "rooms";
-      renderAll();
+      await switchReplyContext();
       return;
     }
-    if (key.name === "m") {
-      activePane = "composer";
-      renderAll();
-      return;
-    }
-    if (key.name === "x") {
-      activePane = "actions";
-      renderAll();
+    if (key.name === "l") {
+      leaveContext();
       return;
     }
     if (key.name === "h") {
@@ -1678,13 +1692,13 @@ async function main(): Promise<void> {
   setNotice(`Connected to ${BROKER_URL} as ${myId}.`);
   renderAll();
 
-  const heartbeatTimer = setInterval(() => {
+  heartbeatTimer = setInterval(() => {
     void heartbeat().catch((error) => {
       showError(`Heartbeat failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   }, HEARTBEAT_INTERVAL_MS);
 
-  const pollTimer = setInterval(() => {
+  pollTimer = setInterval(() => {
     void pollInbox();
   }, POLL_INTERVAL_MS);
 
@@ -1699,14 +1713,10 @@ async function main(): Promise<void> {
   });
 
   process.on("SIGINT", () => {
-    clearInterval(heartbeatTimer);
-    clearInterval(pollTimer);
     void shutdown(0);
   });
 
   process.on("SIGTERM", () => {
-    clearInterval(heartbeatTimer);
-    clearInterval(pollTimer);
     void shutdown(0);
   });
 }

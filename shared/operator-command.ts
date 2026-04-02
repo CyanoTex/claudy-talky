@@ -184,16 +184,21 @@ return `Slash commands:
 /history [limit]
 /context
 /quit
+/exit
 
 Plain text sends to the current DM or room.
 
 Keyboard:
 Tab / Shift+Tab cycle panes
+Ctrl+A jumps straight to the Actions strip
 Left / Right move across the Actions strip
 Enter runs the selected Action or sends the composer text
 Esc clears the composer and leaves edit mode
-Ctrl+A jumps straight to the Actions strip
-x jumps to the Actions strip
+F10 quits immediately
+d opens the selected agent DM
+o opens the selected room
+r replies to the last inbound sender
+l clears the current context
 v cycles minimal, compact, and verbose message details
 
 Use refs from /agents, for example: /dm codex, /dm claude:claudy-talky Ping, /msg "Codex @ claudy-talky" "Need a quick status?"`;

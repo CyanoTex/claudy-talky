@@ -83,23 +83,24 @@ The default operator client registers you as a `human-operator` agent and opens 
 - an Actions strip for common shortcuts
 - a composer with direct typing and slash-command fallback
 
-The ANSI operator is keyboard-first and avoids the Blessed repaint/input issues that affected the earlier TUI. The older Blessed UI is still available as `bun run operator:blessed`.
+The ANSI operator is keyboard-first, does not use mouse input, and avoids the Blessed repaint/input issues that affected the earlier TUI. The older Blessed UI is still available as `bun run operator:blessed`.
 
 Primary interactions:
 
 ```text
-Click an agent row           Open a DM
-Click a room row             Open that room
-Tab / Shift+Tab              Cycle panes, including Actions
+Tab / Shift+Tab              Cycle agents, rooms, thread, and composer
 Left / Right                 Move across the Actions strip
-Enter                        Run the selected Action or send composer text
+Enter                        Open the selected agent/room or send composer text
 Esc                          Clear the composer and leave edit mode
 Ctrl+A                       Jump straight to the Actions strip
-x                            Jump to the Actions strip
+d                            Open the selected agent DM
+o                            Open the selected room
+r                            Reply to the last inbound sender
+l                            Leave the current DM or room
 v                            Cycle minimal, compact, and verbose message details
-Ctrl+R                       Reply to the last inbound sender
-Ctrl+L                       Leave the current DM or room
 F5                           Refresh agents and the current thread
+F10                          Quit immediately
+Ctrl+C                       Quit immediately
 ```
 
 Slash commands still work in the composer:
@@ -120,6 +121,7 @@ Slash commands still work in the composer:
 /history 30
 /context
 /quit
+/exit
 ```
 
 Plain text in the composer sends to the current DM or room.
