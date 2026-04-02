@@ -92,30 +92,7 @@ const screen = blessed.screen({
   title: "claudy-talky operator",
 });
 
-const originalShowCursor = screen.program.showCursor.bind(screen.program);
 const originalHideCursor = screen.program.hideCursor.bind(screen.program);
-let allowHardwareCursor = false;
-
-function lockHardwareCursor(): void {
-  screen.program.showCursor = () => {
-    if (allowHardwareCursor) {
-      return originalShowCursor();
-    }
-
-    return originalHideCursor();
-  };
-  screen.program.cursorShape?.("block", false);
-  originalHideCursor();
-}
-
-function unlockHardwareCursor(): void {
-  allowHardwareCursor = true;
-  screen.program.showCursor = originalShowCursor;
-  screen.program.hideCursor = originalHideCursor;
-  originalShowCursor();
-}
-
-lockHardwareCursor();
 
 const titleBar = blessed.box({
   parent: screen,
@@ -188,7 +165,7 @@ const leftPane = blessed.box({
   top: 5,
   left: 0,
   width: "30%",
-  bottom: 4,
+  bottom: 3,
 });
 
 const rightPane = blessed.box({
@@ -196,7 +173,7 @@ const rightPane = blessed.box({
   top: 5,
   left: "30%",
   width: "70%",
-  bottom: 4,
+  bottom: 3,
 });
 
 const agentsList = blessed.list({
@@ -328,7 +305,7 @@ const composer = blessed.box({
   bottom: 0,
   left: 0,
   width: "100%",
-  height: 4,
+  height: 3,
   border: "line",
   label: " Composer ",
   mouse: true,
@@ -764,19 +741,45 @@ function renderThread(): void {
 
 function renderComposer(): void {
   const prompt = "> ";
-  const cursor = isComposerFocused() ? "█" : "";
-  const rawValue = `${composerValue}${cursor}`;
   const innerWidth =
     typeof composer.width === "number" && typeof composer.ileft === "number" && typeof composer.iright === "number"
       ? Math.max(8, composer.width - composer.ileft - composer.iright - prompt.length - 1)
       : 80;
   const visibleValue =
-    rawValue.length > innerWidth ? rawValue.slice(rawValue.length - innerWidth) : rawValue;
+    composerValue.length > innerWidth
+      ? composerValue.slice(composerValue.length - innerWidth)
+      : composerValue;
 
   composer.setLabel(
     ` Composer | ${contextLabel()}${composerEditing ? " | editing" : ""} `
   );
   composer.setContent(`${prompt}${visibleValue}`);
+}
+
+function syncComposerCursor(): void {
+  if (!isComposerFocused()) {
+    originalHideCursor();
+    return;
+  }
+
+  const coords = composer._getCoords?.();
+  if (!coords) {
+    originalHideCursor();
+    return;
+  }
+
+  const prompt = "> ";
+  const innerWidth =
+    typeof composer.width === "number" && typeof composer.ileft === "number" && typeof composer.iright === "number"
+      ? Math.max(8, composer.width - composer.ileft - composer.iright - prompt.length - 1)
+      : 80;
+  const visibleLength = Math.min(composerValue.length, innerWidth);
+  const cursorX = coords.xi + composer.ileft + prompt.length + visibleLength;
+  const cursorY = coords.yi + composer.itop;
+
+  screen.program.cursorShape?.("line", false);
+  screen.program.cup(cursorY, cursorX);
+  screen.program.showCursor();
 }
 
 function renderAll(): void {
@@ -788,7 +791,7 @@ function renderAll(): void {
   renderThread();
   renderComposer();
   screen.render();
-  screen.program.hideCursor();
+  syncComposerCursor();
 }
 
 function moveSelectedAction(direction: 1 | -1): void {
@@ -1400,7 +1403,8 @@ async function shutdown(code: number): Promise<never> {
     }
   }
 
-  unlockHardwareCursor();
+  screen.program.cursorReset?.();
+  screen.program.showCursor();
   screen.destroy();
   exit(code);
 }
