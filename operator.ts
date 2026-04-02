@@ -348,7 +348,7 @@ const composerInput = blessed.box({
   parent: composer,
   top: 1,
   left: 3,
-  width: "100%-4",
+  width: "100%-5",
   height: 1,
   tags: false,
   content: "",
@@ -860,16 +860,18 @@ function renderComposer(): void {
     inputCoords && typeof inputCoords.xl === "number" && typeof inputCoords.xi === "number"
       ? Math.max(1, inputCoords.xl - inputCoords.xi + 1)
       : typeof screen.width === "number"
-        ? Math.max(8, Math.floor(screen.width) - 6)
+        ? Math.max(8, Math.floor(screen.width) - 7)
         : 80;
   const cursorVisible = isComposerFocused();
-  const maxVisibleTextWidth = cursorVisible ? Math.max(0, inputWidth - 1) : inputWidth;
+  const maxVisibleTextWidth = Math.max(0, inputWidth - 1);
   const visibleValue =
     composerValue.length > maxVisibleTextWidth
       ? composerValue.slice(composerValue.length - maxVisibleTextWidth)
       : composerValue;
   const paddedValue =
-    inputWidth > 0 ? visibleValue.padEnd(inputWidth, " ") : visibleValue;
+    inputWidth > 0
+      ? visibleValue.padEnd(cursorVisible ? maxVisibleTextWidth : inputWidth, " ")
+      : visibleValue;
 
   composer.setLabel(
     ` Composer | ${contextLabel()}${composerEditing ? " | editing" : ""} `
@@ -882,7 +884,7 @@ function renderComposer(): void {
     return;
   }
 
-  const cursorOffset = Math.min(visibleValue.length, Math.max(0, inputWidth - 1));
+  const cursorOffset = Math.min(visibleValue.length, maxVisibleTextWidth);
   composerCursor.left = cursorOffset;
   composerCursor.show();
 }
