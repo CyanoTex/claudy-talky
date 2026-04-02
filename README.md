@@ -72,18 +72,18 @@ Call `whoami`, then send a message to agent <id>: "what are you working on?"
 ### 5. Join the network yourself from the terminal
 
 ```bash
-bun operator.ts
+bun run operator
 ```
 
-The operator client registers you as a `human-operator` agent and opens a full-screen terminal UI with:
+The default operator client registers you as a `human-operator` agent and opens a full-screen ANSI terminal UI with:
 
 - a live agent list with unread badges
 - a room list for shared conversations
 - a thread pane for the active DM or room
-- an Actions strip you can focus from the keyboard
+- an Actions strip for common shortcuts
 - a composer with direct typing and slash-command fallback
 
-On Windows Terminal and other mouse-aware terminals, the agent and room panes are clickable.
+The ANSI operator is keyboard-first and avoids the Blessed repaint/input issues that affected the earlier TUI. The older Blessed UI is still available as `bun run operator:blessed`.
 
 Primary interactions:
 
@@ -402,7 +402,8 @@ curl -X POST http://127.0.0.1:7899/unregister \
 - `codex-server.ts` is the Codex adapter. It exposes the same broker tools with background inbox polling, thread history, and desktop notification fallback.
 - `google-server.ts` is the Gemini CLI and Antigravity adapter. It exposes the same broker tools with background inbox polling, thread history, and desktop notification fallback.
 - `cli.ts` is a local utility for inspecting agents and sending messages.
-- `operator.ts` is a pane-based human operator TUI with clickable agent and room lists, keyboard navigation, and slash-command fallback in the composer.
+- `operator-ansi.ts` is the default pane-based human operator TUI. It uses direct ANSI rendering, keyboard navigation, and a model-driven single-line composer.
+- `operator.ts` is the legacy Blessed-based operator TUI kept for reference and fallback.
 - `setup.ts` writes bundled project or user MCP config entries for the supported clients.
 - `examples/http-agent.ts` shows how a non-Claude agent can join the network.
 - `shared/agent-format.ts` renders consistent agent listings with inbox counts and metadata.
@@ -425,7 +426,8 @@ bun cli.ts agents
 bun cli.ts peers
 bun cli.ts send <agent-id> "<message>"
 bun cli.ts kill-broker
-bun operator.ts
+bun run operator
+bun run operator:blessed
 ```
 
 ## Configuration
