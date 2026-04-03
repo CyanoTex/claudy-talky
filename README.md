@@ -1,6 +1,10 @@
 # AI Coding Disclosure Notice
 
-This project has been built with AI coding assistance, including Codex and Claude Code, and has since diverged substantially from the original `claude-peers` base.
+Codex - GPT 5.4 Extra High (claude-peers cloning, worked on the repo)
+
+Antigravity/Codex Desktop - Were initially part of Claudy-Talky supporting them. Dismissed once CLI was the way forward.
+
+Claude Code - Testing claudy-talky.
 
 # claudy-talky
 
@@ -492,3 +496,11 @@ Legacy `CLAUDE_PEERS_PORT` and `CLAUDE_PEERS_DB` env vars are still accepted as 
 - Codex, Gemini CLI, and other non-Claude agents use heartbeat plus background inbox polling. When their clients support standard MCP log notifications, incoming messages can surface automatically; desktop notifications act as a best-effort fallback, `check_messages` marks surfaced messages as seen, and `message_history` can reopen older threads.
 - Agent-scoped broker calls such as `heartbeat`, `send-message`, `poll-messages`, `acknowledge-messages`, `set-summary`, and `unregister` now require the auth token returned by `register-agent`.
 - This repo does not try to standardize every agent runtime yet; it provides a common local message bus Claude can already use today.
+
+# Credits
+
+[claude-peers](https://github.com/louislva/claude-peers-mcp) - Original.
+
+[Ink](https://github.com/vadimdemedes/ink) - Now powering the remake of Operator TUI.
+
+[neo-neo-blessed](https://github.com/eirikb/neo-neo-blessed) - Too troublesome. Blame Codex.
