@@ -52,8 +52,6 @@ function kindLabel(kind: string): string {
       return "codex";
     case "google-gemini":
       return "gemini";
-    case "google-antigravity":
-      return "antigravity";
     case "human-operator":
       return "operator";
     default:

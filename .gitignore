@@ -28,9 +28,18 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .eslintcache
 .cache
 *.tsbuildinfo
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 .claudy-talky.db
 .claudy-talky.db-shm
 .claudy-talky.db-wal
+.broker-admin-probe.sqlite
+.broker-admin-probe.sqlite-shm
+.broker-admin-probe.sqlite-wal
+.composer-repro.log
+.issue-2.md
+*.lnk
 
 # IntelliJ based IDEs
 .idea

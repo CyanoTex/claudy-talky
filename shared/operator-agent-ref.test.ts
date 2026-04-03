@@ -9,8 +9,8 @@ function agent(overrides: Partial<Agent>): Agent {
     name: "Codex @ claudy-talky",
     kind: "openai-codex",
     transport: "mcp-stdio",
-    cwd: "C:/src/claudy-talky",
-    git_root: "C:/src/claudy-talky",
+    cwd: "C:/workspace/claudy-talky",
+    git_root: "C:/workspace/claudy-talky",
     tty: null,
     summary: "",
     capabilities: ["messaging"],
@@ -60,8 +60,8 @@ test("resolves selectors by ref, kind alias, and full name", () => {
       id: "gemini-1",
       name: "Gemini @ docs",
       kind: "google-gemini",
-      cwd: "C:/src/docs",
-      git_root: "C:/src/docs",
+      cwd: "C:/workspace/docs",
+      git_root: "C:/workspace/docs",
     }),
   ]);
 
@@ -85,8 +85,8 @@ test("reports ambiguous selectors with suggested refs", () => {
     agent({
       id: "codex-2",
       name: "Codex @ docs",
-      cwd: "C:/src/docs",
-      git_root: "C:/src/docs",
+      cwd: "C:/workspace/docs",
+      git_root: "C:/workspace/docs",
     }),
   ]);
 
@@ -101,22 +101,22 @@ test("reports ambiguous selectors with suggested refs", () => {
 test("hides older duplicate agent registrations once they drift past the freshness window", () => {
   const newest = agent({
     id: "ag-new",
-    name: "Antigravity @ Antigravity",
-    kind: "google-antigravity",
+    name: "Gemini CLI @ docs",
+    kind: "google-gemini",
     transport: "mcp-stdio",
-    cwd: "C:/Users/Cyano/AppData/Local/Programs/Antigravity",
+    cwd: "C:/workspace/docs",
     git_root: null,
-    metadata: { client: "Antigravity", launcher: "vscode" },
+    metadata: { client: "Gemini CLI", launcher: "gemini-cli" },
     last_seen: "2026-04-02T14:35:10.000Z",
   });
   const staleDuplicate = agent({
     id: "ag-old",
-    name: "Antigravity @ Antigravity",
-    kind: "google-antigravity",
+    name: "Gemini CLI @ docs",
+    kind: "google-gemini",
     transport: "mcp-stdio",
-    cwd: "C:/Users/Cyano/AppData/Local/Programs/Antigravity",
+    cwd: "C:/workspace/docs",
     git_root: null,
-    metadata: { client: "Antigravity", launcher: "vscode" },
+    metadata: { client: "Gemini CLI", launcher: "gemini-cli" },
     last_seen: "2026-04-02T14:34:58.000Z",
   });
 

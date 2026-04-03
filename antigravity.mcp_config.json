@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "claudy-talky-antigravity": {
-      "command": "bun",
-      "args": ["./google-server.ts", "--client", "antigravity"]
-    }
-  }
-}

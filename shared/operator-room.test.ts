@@ -28,7 +28,7 @@ test("prefers currently online room participants when rebuilding from history", 
   const messages = [
     message(1, "me", "claude"),
     message(2, "claude", "codex"),
-    message(3, "antigravity", "me"),
+    message(3, "gemini", "me"),
   ];
 
   expect(resolveRoomParticipantIds(messages, "me", ["claude", "codex"])).toEqual([
@@ -40,13 +40,12 @@ test("prefers currently online room participants when rebuilding from history", 
 test("falls back to historical participants when no preferred live participants exist", () => {
   const messages = [
     message(1, "me", "claude"),
-    message(2, "claude", "antigravity"),
+    message(2, "claude", "gemini"),
     message(3, "gemini", "me"),
   ];
 
   expect(resolveRoomParticipantIds(messages, "me", [])).toEqual([
     "claude",
-    "antigravity",
     "gemini",
   ]);
 });

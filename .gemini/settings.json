@@ -2,7 +2,7 @@
   "mcpServers": {
     "claudy-talky-gemini": {
       "command": "bun",
-      "args": ["./google-server.ts", "--client", "gemini"],
+      "args": ["./google-server.ts"],
       "cwd": ".",
       "timeout": 600000,
       "trust": false

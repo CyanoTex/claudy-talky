@@ -7,7 +7,7 @@
  * Entry points:
  *   - server.ts  — Claude-facing MCP adapter
  *   - codex-server.ts — Codex-facing MCP adapter
- *   - google-server.ts — Gemini CLI / Antigravity MCP adapter
+ *   - google-server.ts — Gemini CLI MCP adapter
  *   - broker.ts  — Shared localhost broker daemon
  *   - cli.ts     — Local inspection and messaging utility
  *

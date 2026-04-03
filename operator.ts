@@ -830,7 +830,11 @@ function App(): ReactElement {
   const removeAgentFromBroker = useCallback(async (agentId: string) => {
     if (!agentId) throw new Error("No live agent selected.");
     const label = participantDisplay(agentId);
-    const response = await brokerPost<RemoveAgentAdminResponse>("/admin-remove-agent", { id: agentId });
+    const response = await brokerPost<RemoveAgentAdminResponse>("/admin-remove-agent", {
+      agent_id: stateRef.current.myId,
+      target_id: agentId,
+      auth_token: stateRef.current.authToken,
+    });
     if (!response.ok) {
       throw new Error(`Failed to remove ${label} from broker.`);
     }

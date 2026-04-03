@@ -174,7 +174,9 @@ export interface UnregisterRequest {
 }
 
 export interface RemoveAgentAdminRequest {
-  id: AgentId;
+  agent_id: AgentId;
+  target_id: AgentId;
+  auth_token?: string;
 }
 
 export interface RemoveAgentAdminResponse {
