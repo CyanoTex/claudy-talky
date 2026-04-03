@@ -1817,12 +1817,18 @@ function handleUnregister(body: UnregisterRequest): void {
 function handleRemoveAgentAdmin(
   body: RemoveAgentAdminRequest
 ): RemoveAgentAdminResponse {
-  const existing = selectAgentRowById.get(body.id) as AgentRow | null;
+  const actor = requireAuthedAgentRow(body.agent_id, body.auth_token);
+  if (!isWorkAdminAgent(actor)) {
+    throw new BrokerRequestError(403, `Agent ${body.agent_id} is not allowed to remove agents`);
+  }
+
+  const targetId = normalizeText(body.target_id);
+  const existing = selectAgentRowById.get(targetId) as AgentRow | null;
   if (!existing) {
     return { ok: true, removed: false };
   }
 
-  removeAgent(body.id);
+  removeAgent(targetId);
   return { ok: true, removed: true };
 }
 

@@ -1,12 +1,6 @@
 # AI Coding Disclosure Notice
 
-Codex - GPT 5.4 Extra High (claude-peers cloning, turning this project into its own thing)
-
-Claude Code - Being a test subject
-
-Antigravity/Codex Desktop - Initially part of claudy-talky testing but CLIs are the way to go.
-
-Ink TUI - Being awesome, powering Claude Code CLI and now powering Operator TUI! :-D
+This project has been built with AI coding assistance, including Codex and Claude Code, and has since diverged substantially from the original `claude-peers` base.
 
 # claudy-talky
 
@@ -24,7 +18,7 @@ A walkie-talkie for CLI agents to talk to each other, coordinate, and collaborat
 
 - Claude Code CLI, Codex CLI, and Gemini CLI are the first-class path.
 - Every agent can also join over plain HTTP.
-- Legacy desktop-oriented sample configs may remain in the repo, but the supported direction is CLI-first.
+- The supported direction is CLI-first.
 - Everyone shares the same local registry, heartbeat loop, and message queue.
 - Agents track unread counts, delivery/open/read state, launcher metadata, and notification style hints.
 - Messages stay grouped into conversations with reply links and retrievable thread history.
@@ -56,13 +50,13 @@ bun setup
 ### 2. Register Claude Code CLI
 
 ```bash
-claude mcp add --scope user --transport stdio claudy-talky -- bun /absolute/path/to/claudy-talky/server.ts
+claude mcp add --scope user --transport stdio claudy-talky -- bun <repo-root>/server.ts
 ```
 
 ### 3. Start Claude Code CLI with channels enabled
 
 ```bash
-claude --dangerously-skip-permissions --dangerously-load-development-channels server:claudy-talky
+claude --dangerously-load-development-channels server:claudy-talky
 ```
 
 ### 4. Ask Claude to inspect the local agent network
@@ -190,6 +184,10 @@ Ownership is enforced at the broker:
 
 Remaining follow-up work now lives in [`ROADMAP.md`](./ROADMAP.md).
 
+## Security
+
+See [`SECURITY.md`](./SECURITY.md) before exposing, packaging, or redistributing this repo.
+
 ## Setup Helper
 
 `setup.ts` can now write the known MCP config entries for the bundled clients instead of relying only on manual copy/paste.
@@ -231,7 +229,7 @@ enabled = true
 If you want to register it directly from the CLI instead, run:
 
 ```bash
-codex mcp add claudy-talky -- bun /absolute/path/to/claudy-talky/codex-server.ts
+codex mcp add claudy-talky -- bun <repo-root>/codex-server.ts
 ```
 
 ### Global setup
@@ -241,7 +239,7 @@ If you prefer editing `~/.codex/config.toml` by hand, add the equivalent entry:
 ```toml
 [mcp_servers."claudy-talky"]
 command = "bun"
-args = ["C:/absolute/path/to/claudy-talky/codex-server.ts"]
+args = ["<repo-root>/codex-server.ts"]
 startup_timeout_sec = 20
 tool_timeout_sec = 60
 enabled = true
@@ -277,7 +275,7 @@ If this repo is trusted in Gemini CLI, the checked-in config is enough:
   "mcpServers": {
     "claudy-talky-gemini": {
       "command": "bun",
-      "args": ["./google-server.ts", "--client", "gemini"]
+      "args": ["./google-server.ts"]
     }
   }
 }
@@ -288,7 +286,7 @@ If this repo is trusted in Gemini CLI, the checked-in config is enough:
 You can also add it from the shell:
 
 ```bash
-gemini mcp add claudy-talky-gemini bun ./google-server.ts --client gemini
+gemini mcp add claudy-talky-gemini bun ./google-server.ts
 ```
 
 ### Gemini behavior

@@ -51,7 +51,7 @@ bun examples/http-agent.ts
 Default to Bun instead of Node.js tooling.
 
 - Use `bun <file>` instead of `node <file>`
-- Use `bun install` instead of `npm install` or `pnpm install`
+- Use Bun for install, run, and test commands in this repo
 - Use `bun test` for tests
 - Prefer `Bun.serve`, `bun:sqlite`, and built-in `fetch`
 

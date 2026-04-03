@@ -42,8 +42,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       value === "all" ||
       value === "claude" ||
       value === "codex" ||
-      value === "gemini" ||
-      value === "antigravity"
+      value === "gemini"
     ) {
       clients.push(...expandSetupSelection(value));
       continue;

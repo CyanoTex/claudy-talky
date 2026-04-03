@@ -543,13 +543,13 @@ test("re-registering the same parent session replaces the older broker row", asy
   const first = await brokerFetch<{ id: string; auth_token?: string }>(
     "/register-agent",
     {
-      name: "Antigravity @ Antigravity",
-      kind: "google-antigravity",
+      name: "Gemini CLI @ docs",
+      kind: "google-gemini",
       transport: "mcp-stdio",
-      cwd: "C:/Users/Cyano/AppData/Local/Programs/Antigravity",
+      cwd: "C:/workspace/docs",
       metadata: {
-        client: "Antigravity",
-        launcher: "vscode",
+        client: "Gemini CLI",
+        launcher: "gemini-cli",
         parent_pid: 424242,
       },
     }
@@ -558,13 +558,13 @@ test("re-registering the same parent session replaces the older broker row", asy
   const second = await brokerFetch<{ id: string; auth_token?: string }>(
     "/register-agent",
     {
-      name: "Antigravity @ Antigravity",
-      kind: "google-antigravity",
+      name: "Gemini CLI @ docs",
+      kind: "google-gemini",
       transport: "mcp-stdio",
-      cwd: "C:/Users/Cyano/AppData/Local/Programs/Antigravity",
+      cwd: "C:/workspace/docs",
       metadata: {
-        client: "Antigravity",
-        launcher: "vscode",
+        client: "Gemini CLI",
+        launcher: "gemini-cli",
         parent_pid: 424242,
       },
     }
@@ -576,7 +576,7 @@ test("re-registering the same parent session replaces the older broker row", asy
     "/list-agents",
     {
       scope: "machine",
-      kind: "google-antigravity",
+      kind: "google-gemini",
     }
   );
 
@@ -586,6 +586,16 @@ test("re-registering the same parent session replaces the older broker row", asy
 });
 
 test("admin removal deletes an agent row without the agent auth token", async () => {
+  const operator = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Operator",
+      kind: "human-operator",
+      transport: "ink-tui",
+      capabilities: ["work_admin"],
+    }
+  );
+
   const target = await brokerFetch<{ id: string; auth_token?: string }>(
     "/register-agent",
     {
@@ -598,7 +608,9 @@ test("admin removal deletes an agent row without the agent auth token", async ()
   const removed = await brokerFetch<{ ok: boolean; removed: boolean }>(
     "/admin-remove-agent",
     {
-      id: target.id,
+      agent_id: operator.id,
+      target_id: target.id,
+      auth_token: operator.auth_token,
     }
   );
 
@@ -610,6 +622,41 @@ test("admin removal deletes an agent row without the agent auth token", async ()
   });
 
   expect(agents.some((agent) => agent.id === target.id)).toBe(false);
+});
+
+test("admin removal rejects unauthenticated callers", async () => {
+  const operator = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Operator",
+      kind: "human-operator",
+      transport: "ink-tui",
+      capabilities: ["work_admin"],
+    }
+  );
+
+  const target = await brokerFetch<{ id: string; auth_token?: string }>(
+    "/register-agent",
+    {
+      name: "Stale UI Target",
+      kind: "custom-http-agent",
+      transport: "http-poll",
+    }
+  );
+
+  const response = await fetch(`${brokerUrl}/admin-remove-agent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      agent_id: operator.id,
+      target_id: target.id,
+      auth_token: "wrong-token",
+    }),
+  });
+
+  expect(response.status).toBe(403);
+  const payload = await response.json() as { error?: string };
+  expect(payload.error).toContain("invalid auth token");
 });
 
 test("creates handoffs, tracks work state, and records work events", async () => {

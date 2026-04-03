@@ -7,24 +7,19 @@ import {
   upsertCodexConfig,
 } from "./setup-config.ts";
 
-const repoRoot = "C:/src/claudy-talky";
-const homeDir = "C:/Users/Cyano";
+const repoRoot = "C:/workspace/claudy-talky";
+const homeDir = "C:/Users/Public";
 
 test("expandSetupSelection prefers CLI clients for the cli preset", () => {
   expect(expandSetupSelection("cli")).toEqual(["claude", "codex", "gemini"]);
-  expect(expandSetupSelection("all")).toEqual([
-    "claude",
-    "codex",
-    "gemini",
-    "antigravity",
-  ]);
+  expect(expandSetupSelection("all")).toEqual(["claude", "codex", "gemini"]);
 });
 
 test("upsertCodexConfig adds a claudy-talky block to empty config", () => {
   const result = upsertCodexConfig("", "user", repoRoot);
 
   expect(result).toContain('[mcp_servers."claudy-talky"]');
-  expect(result).toContain('args = ["C:/src/claudy-talky/codex-server.ts"]');
+  expect(result).toContain('args = ["C:/workspace/claudy-talky/codex-server.ts"]');
 });
 
 test("upsertCodexConfig replaces an existing claudy-talky block", () => {
@@ -50,7 +45,7 @@ test("renderSetupWrite builds a user-scoped Gemini config with absolute paths", 
 
   expect(write.path).toBe(join(homeDir, ".gemini", "settings.json"));
   expect(write.contents).toContain('"claudy-talky-gemini"');
-  expect(write.contents).toContain('"C:/src/claudy-talky/google-server.ts"');
+  expect(write.contents).toContain('"C:/workspace/claudy-talky/google-server.ts"');
 });
 
 test("resolveSetupPath keeps Claude on project config even in user scope", () => {

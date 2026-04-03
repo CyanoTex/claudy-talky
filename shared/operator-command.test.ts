@@ -182,9 +182,9 @@ test("parses DM and room slash commands", () => {
     roomRef: "room-everyone-1234",
   });
 
-  expect(parseOperatorInput("/remove-agent antigravity:antigravity")).toEqual({
+  expect(parseOperatorInput("/remove-agent gemini:docs")).toEqual({
     kind: "remove-agent",
-    agentSelector: "antigravity:antigravity",
+    agentSelector: "gemini:docs",
   });
 });
 

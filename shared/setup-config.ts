@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export type SetupClient = "claude" | "codex" | "gemini" | "antigravity";
+export type SetupClient = "claude" | "codex" | "gemini";
 export type SetupScope = "project" | "user";
 export type SetupSelection = SetupClient | "cli" | "all";
 
@@ -43,8 +43,6 @@ export function resolveSetupPath(
         return { path: join(repoRoot, ".codex", "config.toml") };
       case "gemini":
         return { path: join(repoRoot, ".gemini", "settings.json") };
-      case "antigravity":
-        return { path: join(repoRoot, "antigravity.mcp_config.json") };
     }
   }
 
@@ -59,8 +57,6 @@ export function resolveSetupPath(
       return { path: join(homeDir, ".codex", "config.toml") };
     case "gemini":
       return { path: join(homeDir, ".gemini", "settings.json") };
-    case "antigravity":
-      return { path: join(homeDir, ".gemini", "antigravity", "mcp_config.json") };
   }
 }
 
@@ -71,25 +67,13 @@ function claudeEntry(scope: SetupScope): Record<string, unknown> {
   };
 }
 
-function geminiEntry(
-  client: "gemini" | "antigravity",
-  scope: SetupScope,
-  repoRoot: string
-): Record<string, unknown> {
+function geminiEntry(scope: SetupScope, repoRoot: string): Record<string, unknown> {
   return {
     command: "bun",
-    args: [
-      scope === "project" ? "./google-server.ts" : portablePath(join(repoRoot, "google-server.ts")),
-      "--client",
-      client,
-    ],
-    ...(client === "gemini"
-      ? {
-          cwd: scope === "project" ? "." : repoRoot,
-          timeout: 600000,
-          trust: false,
-        }
-      : {}),
+    args: [scope === "project" ? "./google-server.ts" : portablePath(join(repoRoot, "google-server.ts"))],
+    cwd: scope === "project" ? "." : repoRoot,
+    timeout: 600000,
+    trust: false,
   };
 }
 
@@ -216,18 +200,7 @@ export function renderSetupWrite(
         contents: jsonConfigWithServer(
           existingText,
           "claudy-talky-gemini",
-          geminiEntry("gemini", scope, repoRoot)
-        ),
-      };
-    case "antigravity":
-      return {
-        client,
-        path: target.path,
-        note: target.note,
-        contents: jsonConfigWithServer(
-          existingText,
-          "claudy-talky-antigravity",
-          geminiEntry("antigravity", scope, repoRoot)
+          geminiEntry(scope, repoRoot)
         ),
       };
   }
@@ -238,7 +211,7 @@ export function expandSetupSelection(selection: SetupSelection): SetupClient[] {
     case "cli":
       return ["claude", "codex", "gemini"];
     case "all":
-      return ["claude", "codex", "gemini", "antigravity"];
+      return ["claude", "codex", "gemini"];
     default:
       return [selection];
   }
@@ -252,13 +225,11 @@ Clients:
   claude
   codex
   gemini
-  antigravity
   all
 
 Examples:
   ${scriptName} install cli --scope user
-  ${scriptName} install all --scope user
-  ${scriptName} install antigravity --scope user`;
+  ${scriptName} install all --scope user`;
 }
 
 export function setupDirname(path: string): string {
