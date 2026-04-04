@@ -23,7 +23,7 @@ type LegacyPeer = {
   last_seen: string;
 };
 
-class BrokerApiError extends Error {
+export class BrokerApiError extends Error {
   status: number;
   path: string;
 
@@ -33,6 +33,17 @@ class BrokerApiError extends Error {
     this.status = status;
     this.path = path;
   }
+}
+
+export function isMissingAgentBrokerError(
+  error: unknown,
+  agentId: string | null | undefined
+): error is BrokerApiError {
+  if (!(error instanceof BrokerApiError) || error.status !== 404 || !agentId) {
+    return false;
+  }
+
+  return error.message.includes(`Agent ${agentId} not found`);
 }
 
 function leafName(cwd: string | null | undefined): string | null {
