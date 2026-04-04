@@ -9,6 +9,7 @@ import type {
   HandoffWorkResponse,
   Message,
   PollMessagesResponse,
+  RemoveAgentAdminResponse,
   RegisterAgentResponse,
   SendMessageResponse,
 } from "./shared/types.ts";
@@ -215,7 +216,6 @@ type HelperAgent = RegisterAgentResponse & {
 
 async function registerHelperAgent(name: string): Promise<HelperAgent> {
   const registration = await brokerFetch<RegisterAgentResponse>("/register-agent", {
-    pid: process.pid,
     name,
     kind: "test-helper",
     transport: "test-helper",
@@ -238,6 +238,37 @@ async function unregisterHelperAgent(helper: HelperAgent): Promise<void> {
   await brokerFetch("/unregister", {
     id: helper.id,
     auth_token: helper.auth_token,
+  });
+}
+
+async function registerAdminAgent(name: string): Promise<HelperAgent> {
+  const registration = await brokerFetch<RegisterAgentResponse>("/register-agent", {
+    name,
+    kind: "human-operator",
+    transport: "test-admin",
+    cwd: process.cwd(),
+    summary: "CLI adapter E2E admin helper",
+    capabilities: ["messaging", "work_admin"],
+    metadata: {
+      client: "E2E admin helper",
+      adapter: "test",
+    },
+  });
+
+  return {
+    ...registration,
+    name,
+  };
+}
+
+async function removeAgentAsAdmin(
+  admin: HelperAgent,
+  targetId: string
+): Promise<RemoveAgentAdminResponse> {
+  return brokerFetch<RemoveAgentAdminResponse>("/admin-remove-agent", {
+    agent_id: admin.id,
+    target_id: targetId,
+    auth_token: admin.auth_token,
   });
 }
 
@@ -353,9 +384,12 @@ for (const config of CLI_ADAPTERS) {
     const helper = await registerHelperAgent(
       `${config.label} helper ${Math.random().toString(36).slice(2, 8)}`
     );
+    const admin = await registerAdminAgent(
+      `${config.label} admin ${Math.random().toString(36).slice(2, 8)}`
+    );
 
     try {
-      const adapterAgent = await waitForAgentByKind(config.kind);
+      let adapterAgent = await waitForAgentByKind(config.kind);
 
       const tools = await session.client.listTools();
         expect(tools.tools.map((tool) => tool.name)).toEqual(
@@ -397,6 +431,39 @@ for (const config of CLI_ADAPTERS) {
         `Summary: ${summary}`
       );
       expect(updatedWhoAmI).toContain(`Summary: ${summary}`);
+
+      const removed = await removeAgentAsAdmin(admin, adapterAgent.id);
+      expect(removed.ok).toBe(true);
+      expect(removed.removed).toBe(true);
+
+      await waitFor(
+        `${config.label} original registration removed`,
+        async () => (await listAgents()).some((agent) => agent.id === adapterAgent.id),
+        (exists) => exists === false
+      );
+
+      const recoveredSummary = `${config.label} recovered summary`;
+      const recoveredSetSummary = textContent(
+        await session.client.callTool({
+          name: "set_summary",
+          arguments: { summary: recoveredSummary },
+        })
+      );
+      expect(recoveredSetSummary).toContain(recoveredSummary);
+
+      const recoveredWhoAmI = await waitForToolText(
+        session.client,
+        "whoami",
+        {},
+        `Summary: ${recoveredSummary}`
+      );
+      expect(recoveredWhoAmI).toContain(`Summary: ${recoveredSummary}`);
+      const recoveredId = recoveredWhoAmI.match(/- ID: ([^\r\n]+)/)?.[1] ?? "";
+      expect(recoveredId).toBeTruthy();
+      expect(recoveredId).not.toBe(adapterAgent.id);
+
+      adapterAgent = await waitForAgentByKind(config.kind);
+      expect(adapterAgent.id).toBe(recoveredId);
 
       const listAgentsText = textContent(
         await session.client.callTool({
@@ -601,6 +668,7 @@ for (const config of CLI_ADAPTERS) {
       );
     } finally {
       await unregisterHelperAgent(helper);
+      await unregisterHelperAgent(admin);
       await closeAdapter(session, 0);
     }
   }, { timeout: 20_000 });
