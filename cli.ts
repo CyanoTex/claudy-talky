@@ -10,6 +10,7 @@
  *   bun cli.ts peers             Alias for agents
  *   bun cli.ts send <id> <msg>   Send a message to an agent
  *   bun cli.ts kill-broker       Stop the broker daemon
+ *   bun cli.ts enable-channel    Show how to enable instant message delivery
  */
 
 import { formatAgent } from "./shared/agent-format.ts";
@@ -172,6 +173,39 @@ switch (command) {
     break;
   }
 
+  case "enable-channel": {
+    const channelFlag = "--dangerously-load-development-channels";
+    const channelTarget = "plugin:claudy-talky@claudy-talky-marketplace";
+
+    console.log(`Channel activation for claudy-talky
+
+Claude Code's channel protocol enables instant message delivery —
+messages from other agents interrupt your session as they arrive,
+without waiting for check_messages.
+
+The claudy-talky marketplace plugin already declares channel support,
+but channels are a research preview feature and must be enabled per
+session via a CLI flag.
+
+Launch Claude Code with:
+
+  claude ${channelFlag} ${channelTarget}
+
+If you installed claudy-talky via 'claude mcp add' instead of the
+marketplace, use:
+
+  claude ${channelFlag} server:claudy-talky
+
+To make this your default, add a shell alias:
+
+  alias claude-talky='claude ${channelFlag} ${channelTarget}'
+
+Note: There is no persistent channel config in settings.json yet.
+This flag must be passed on every launch until channels graduate
+from research preview.`);
+    break;
+  }
+
   default:
     console.log(`claudy-talky CLI
 
@@ -180,5 +214,6 @@ Usage:
   bun cli.ts agents            List all agents
   bun cli.ts peers             Alias for agents
   bun cli.ts send <id> <msg>   Send a message to an agent
-  bun cli.ts kill-broker       Stop the broker daemon`);
+  bun cli.ts kill-broker       Stop the broker daemon
+  bun cli.ts enable-channel    Show how to enable instant message delivery`);
 }
