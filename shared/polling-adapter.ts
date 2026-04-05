@@ -9,10 +9,10 @@ import {
 import { buildAgentMetadata } from "./agent-metadata.ts";
 import { formatAgent } from "./agent-format.ts";
 import {
-  appendMessageStateLines,
-  conversationIdText,
-  replyToMessageIdValue,
-} from "./message-format.ts";
+  formatInboxNotification,
+  formatInboxNotificationTitle,
+} from "./inbox-notification-format.ts";
+import { appendMessageStateLines } from "./message-format.ts";
 import { createParticipantDisplay } from "./participant-display.ts";
 import {
   formatWorkDetailLines,
@@ -102,6 +102,7 @@ export type PollingAdapterOptions = {
 type BufferedInboxMessage = {
   message: PollMessagesResponse["messages"][number];
   sender: Agent | null;
+  senderLabel: string;
 };
 
 async function isBrokerAlive(brokerUrl: string): Promise<boolean> {
@@ -198,43 +199,6 @@ function formatBufferedMessage(entry: BufferedInboxMessage): string {
 
   return details.join("\n");
 }
-
-function formatInboxNotification(entry: BufferedInboxMessage): string {
-  const { message, sender } = entry;
-  const header = sender
-    ? `New claudy-talky message from ${sender.name} (${sender.kind})`
-    : `New claudy-talky message from ${message.from_id}`;
-  const details: string[] = [header, "", message.text];
-
-  details.push("", `Message ID: ${message.id}`);
-  const conversationId = conversationIdText(message);
-  if (conversationId) {
-    details.push("", `Conversation: ${conversationId}`);
-  }
-
-  const replyToMessageId = replyToMessageIdValue(message);
-  if (replyToMessageId !== null) {
-    details.push(`Reply to message #${replyToMessageId}`);
-  }
-
-  if (sender?.summary) {
-    details.push("", `Sender summary: ${sender.summary}`);
-  }
-
-  if (sender?.cwd) {
-    details.push(`Sender cwd: ${sender.cwd}`);
-  }
-
-  if (message.delivered_at) {
-    details.push(`Delivered to your inbox at: ${message.delivered_at}`);
-  }
-
-  details.push(
-    'Use `check_messages` to mark unread notes as seen, or `message_history` to revisit the thread later.'
-  );
-  return details.join("\n");
-}
-
 function formatHistoryMessage(
   message: Message,
   participantDisplay: (agentId: AgentId) => string,
@@ -615,9 +579,13 @@ export async function runPollingAdapter(
       }
 
       const byId = await listAgentsById();
+      const participantDisplay = createParticipantDisplay(byId.values(), {
+        selfId: myId,
+      });
       const arrivals = result.messages.map((message) => ({
         message,
         sender: byId.get(message.from_id) ?? null,
+        senderLabel: participantDisplay(message.from_id),
       }));
 
       bufferedInbox.push(...arrivals);
@@ -635,9 +603,7 @@ export async function runPollingAdapter(
 
         if (desktopNotifications) {
           const notified = await sendDesktopNotification({
-            title: entry.sender
-              ? `claudy-talky: ${entry.sender.name}`
-              : `claudy-talky: ${entry.message.from_id}`,
+            title: formatInboxNotificationTitle(entry),
             body: entry.message.text,
           });
 
@@ -648,7 +614,7 @@ export async function runPollingAdapter(
         }
 
         log(
-          `Notified inbound message from ${entry.sender?.name ?? entry.message.from_id}: ${entry.message.text.slice(0, 80)}`
+          `Notified inbound message from ${entry.senderLabel}: ${entry.message.text.slice(0, 80)}`
         );
       }
 
