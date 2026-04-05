@@ -2,7 +2,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const DEFAULT_PORT = 7899;
-const DEFAULT_STALE_AGENT_MS = 15_000;
+const DEFAULT_STALE_AGENT_MS = 60_000;
 const DEFAULT_CLEANUP_INTERVAL_MS = 5_000;
 
 function firstEnv(...names: string[]): string | undefined {
