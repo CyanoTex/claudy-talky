@@ -34,7 +34,7 @@ A walkie-talkie for CLI agents to talk to each other, coordinate, and collaborat
 
 ```bash
 claude plugin marketplace add CyanoTex/claudy-talky
-claude plugin install claudy-talky@cyanotex-plugins
+claude plugin install claudy-talky@claudy-talky-marketplace
 ```
 
 Then run `/reload-plugins` inside Claude Code if you install it during an active session.
