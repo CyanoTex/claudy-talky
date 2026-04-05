@@ -9,10 +9,11 @@ import {
 import { buildAgentMetadata } from "./agent-metadata.ts";
 import { formatAgent } from "./agent-format.ts";
 import {
-  appendMessageStateLines,
-  conversationIdText,
-  replyToMessageIdValue,
-} from "./message-format.ts";
+  formatInboxNotification,
+  formatInboxNotificationTitle,
+} from "./inbox-notification-format.ts";
+import { appendMessageStateLines } from "./message-format.ts";
+import { createParticipantDisplay } from "./participant-display.ts";
 import {
   formatWorkDetailLines,
   formatWorkListLine,
@@ -101,6 +102,7 @@ export type PollingAdapterOptions = {
 type BufferedInboxMessage = {
   message: PollMessagesResponse["messages"][number];
   sender: Agent | null;
+  senderLabel: string;
 };
 
 async function isBrokerAlive(brokerUrl: string): Promise<boolean> {
@@ -197,54 +199,16 @@ function formatBufferedMessage(entry: BufferedInboxMessage): string {
 
   return details.join("\n");
 }
-
-function formatInboxNotification(entry: BufferedInboxMessage): string {
-  const { message, sender } = entry;
-  const header = sender
-    ? `New claudy-talky message from ${sender.name} (${sender.kind})`
-    : `New claudy-talky message from ${message.from_id}`;
-  const details: string[] = [header, "", message.text];
-
-  details.push("", `Message ID: ${message.id}`);
-  const conversationId = conversationIdText(message);
-  if (conversationId) {
-    details.push("", `Conversation: ${conversationId}`);
-  }
-
-  const replyToMessageId = replyToMessageIdValue(message);
-  if (replyToMessageId !== null) {
-    details.push(`Reply to message #${replyToMessageId}`);
-  }
-
-  if (sender?.summary) {
-    details.push("", `Sender summary: ${sender.summary}`);
-  }
-
-  if (sender?.cwd) {
-    details.push(`Sender cwd: ${sender.cwd}`);
-  }
-
-  if (message.delivered_at) {
-    details.push(`Delivered to your inbox at: ${message.delivered_at}`);
-  }
-
-  details.push(
-    'Use `check_messages` to mark unread notes as seen, or `message_history` to revisit the thread later.'
-  );
-  return details.join("\n");
-}
-
 function formatHistoryMessage(
   message: Message,
-  agentsById: Map<AgentId, Agent>,
+  participantDisplay: (agentId: AgentId) => string,
   myId: AgentId
 ): string {
   const otherId = message.from_id === myId ? message.to_id : message.from_id;
-  const otherAgent = agentsById.get(otherId);
   const direction =
     message.from_id === myId
-      ? `You -> ${otherAgent?.name ?? otherId}`
-      : `${otherAgent?.name ?? message.from_id} -> you`;
+      ? `You -> ${participantDisplay(otherId)}`
+      : `${participantDisplay(message.from_id)} -> you`;
   const details = [`Message #${message.id} ${direction} at ${message.sent_at}:`, message.text];
   appendMessageStateLines(details, message);
   return details.join("\n");
@@ -262,18 +226,6 @@ function formatWhoAmI(identity: WhoAmIResponse): string {
     `- TTY: ${identity.tty ?? "(unknown)"}`,
     `- Summary: ${identity.summary || "(empty)"}`,
   ].join("\n");
-}
-
-function workParticipantDisplay(
-  agentsById: Map<AgentId, Agent>,
-  selfId: AgentId,
-  agentId: AgentId
-): string {
-  if (agentId === selfId) {
-    return "You";
-  }
-
-  return agentsById.get(agentId)?.name ?? agentId;
 }
 
 async function resolveWorkspaceCwd(
@@ -627,9 +579,13 @@ export async function runPollingAdapter(
       }
 
       const byId = await listAgentsById();
+      const participantDisplay = createParticipantDisplay(byId.values(), {
+        selfId: myId,
+      });
       const arrivals = result.messages.map((message) => ({
         message,
         sender: byId.get(message.from_id) ?? null,
+        senderLabel: participantDisplay(message.from_id),
       }));
 
       bufferedInbox.push(...arrivals);
@@ -647,9 +603,7 @@ export async function runPollingAdapter(
 
         if (desktopNotifications) {
           const notified = await sendDesktopNotification({
-            title: entry.sender
-              ? `claudy-talky: ${entry.sender.name}`
-              : `claudy-talky: ${entry.message.from_id}`,
+            title: formatInboxNotificationTitle(entry),
             body: entry.message.text,
           });
 
@@ -660,7 +614,7 @@ export async function runPollingAdapter(
         }
 
         log(
-          `Notified inbound message from ${entry.sender?.name ?? entry.message.from_id}: ${entry.message.text.slice(0, 80)}`
+          `Notified inbound message from ${entry.senderLabel}: ${entry.message.text.slice(0, 80)}`
         );
       }
 
@@ -879,12 +833,15 @@ export async function runPollingAdapter(
           }
 
           const agentsById = await listAgentsById();
+          const participantDisplay = createParticipantDisplay(agentsById.values(), {
+            selfId: myId,
+          });
           return {
             content: [
               {
                 type: "text" as const,
                 text: `${result.messages.length} message(s):\n\n${result.messages
-                  .map((message) => formatHistoryMessage(message, agentsById, myId!))
+                  .map((message) => formatHistoryMessage(message, participantDisplay, myId!))
                   .join("\n\n---\n\n")}`,
               },
             ],
@@ -939,16 +896,15 @@ export async function runPollingAdapter(
           }
 
           const agentsById = await listAgentsById();
+          const participantDisplay = createParticipantDisplay(agentsById.values(), {
+            selfId: myId,
+          });
           return {
             content: [
               {
                 type: "text" as const,
                 text: `${result.work_items.length} work item(s):\n\n${result.work_items
-                  .map((work) =>
-                    formatWorkListLine(work, (agentId) =>
-                      workParticipantDisplay(agentsById, myId!, agentId)
-                    )
-                  )
+                  .map((work) => formatWorkListLine(work, participantDisplay))
                   .join("\n")}`,
               },
             ],
@@ -1034,6 +990,9 @@ export async function runPollingAdapter(
           }
 
           const agentsById = await listAgentsById();
+          const participantDisplay = createParticipantDisplay(agentsById.values(), {
+            selfId: myId,
+          });
           return {
             content: [
               {
@@ -1041,7 +1000,7 @@ export async function runPollingAdapter(
                 text: formatWorkDetailLines(
                   result.work,
                   result.events,
-                  (agentId) => workParticipantDisplay(agentsById, myId!, agentId)
+                  participantDisplay
                 ).join("\n"),
               },
             ],
