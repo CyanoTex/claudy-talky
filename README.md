@@ -28,6 +28,24 @@ A walkie-talkie for CLI agents to talk to each other, coordinate, and collaborat
 - Messages stay grouped into conversations with reply links and retrievable thread history.
 - Agent-scoped actions are authenticated with per-agent broker tokens, and the broker uses schema-versioned migrations plus a startup lock to keep launches predictable.
 
+## Claude Code Marketplace
+
+`claudy-talky` now ships the metadata Claude Code expects for a third-party plugin marketplace. That gives Claude Code users a native install path and marketplace-managed updates for the Claude adapter instead of manual `claude mcp add` commands.
+
+```bash
+claude plugin marketplace add CyanoTex/claudy-talky
+claude plugin install claudy-talky@cyanotex-plugins
+```
+
+Then run `/reload-plugins` inside Claude Code if you install it during an active session.
+
+Notes:
+
+- This installs the Claude Code side only. Codex CLI and Gemini CLI still use the setup flow documented below.
+- The bundled Claude plugin still requires `bun` to be installed because it launches `server.ts` with Bun.
+- Third-party marketplaces default to auto-update off. In Claude Code, open `/plugin`, go to `Marketplaces`, select `cyanotex-plugins`, and enable auto-update if you want startup-time refreshes.
+- If you want Anthropic-hosted distribution instead of a self-hosted marketplace, submit the plugin to the official marketplace from Claude.ai or the Anthropic Console.
+
 ```text
    Agent session                 HTTP agent                Agent session
 ┌──────────────────┐          ┌───────────────┐        ┌──────────────────┐
@@ -41,6 +59,8 @@ A walkie-talkie for CLI agents to talk to each other, coordinate, and collaborat
 ## Quick Start
 
 This is the CLI-first path: install the repo, write the CLI MCP configs, then start Claude Code CLI and message the other CLI agents.
+
+If you only want Claude Code and prefer marketplace installs, use the marketplace flow above instead of the manual Claude setup in this section.
 
 ### 1. Install
 

@@ -1,0 +1,21 @@
+{
+  "name": "claudy-talky",
+  "version": "0.4.0",
+  "description": "Shared local broker and MCP bridge for Claude Code, Codex, Gemini, and local agents.",
+  "author": {
+    "name": "CyanoTex",
+    "url": "https://github.com/CyanoTex"
+  },
+  "homepage": "https://github.com/CyanoTex/claudy-talky",
+  "repository": "https://github.com/CyanoTex/claudy-talky",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "mcp",
+    "broker",
+    "codex",
+    "gemini",
+    "multi-agent"
+  ],
+  "mcpServers": "./claude-plugin.mcp.json"
+}
