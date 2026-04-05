@@ -13,6 +13,7 @@ import {
   conversationIdText,
   replyToMessageIdValue,
 } from "./message-format.ts";
+import { createParticipantDisplay } from "./participant-display.ts";
 import {
   formatWorkDetailLines,
   formatWorkListLine,
@@ -236,15 +237,14 @@ function formatInboxNotification(entry: BufferedInboxMessage): string {
 
 function formatHistoryMessage(
   message: Message,
-  agentsById: Map<AgentId, Agent>,
+  participantDisplay: (agentId: AgentId) => string,
   myId: AgentId
 ): string {
   const otherId = message.from_id === myId ? message.to_id : message.from_id;
-  const otherAgent = agentsById.get(otherId);
   const direction =
     message.from_id === myId
-      ? `You -> ${otherAgent?.name ?? otherId}`
-      : `${otherAgent?.name ?? message.from_id} -> you`;
+      ? `You -> ${participantDisplay(otherId)}`
+      : `${participantDisplay(message.from_id)} -> you`;
   const details = [`Message #${message.id} ${direction} at ${message.sent_at}:`, message.text];
   appendMessageStateLines(details, message);
   return details.join("\n");
@@ -262,18 +262,6 @@ function formatWhoAmI(identity: WhoAmIResponse): string {
     `- TTY: ${identity.tty ?? "(unknown)"}`,
     `- Summary: ${identity.summary || "(empty)"}`,
   ].join("\n");
-}
-
-function workParticipantDisplay(
-  agentsById: Map<AgentId, Agent>,
-  selfId: AgentId,
-  agentId: AgentId
-): string {
-  if (agentId === selfId) {
-    return "You";
-  }
-
-  return agentsById.get(agentId)?.name ?? agentId;
 }
 
 async function resolveWorkspaceCwd(
@@ -879,12 +867,15 @@ export async function runPollingAdapter(
           }
 
           const agentsById = await listAgentsById();
+          const participantDisplay = createParticipantDisplay(agentsById.values(), {
+            selfId: myId,
+          });
           return {
             content: [
               {
                 type: "text" as const,
                 text: `${result.messages.length} message(s):\n\n${result.messages
-                  .map((message) => formatHistoryMessage(message, agentsById, myId!))
+                  .map((message) => formatHistoryMessage(message, participantDisplay, myId!))
                   .join("\n\n---\n\n")}`,
               },
             ],
@@ -939,16 +930,15 @@ export async function runPollingAdapter(
           }
 
           const agentsById = await listAgentsById();
+          const participantDisplay = createParticipantDisplay(agentsById.values(), {
+            selfId: myId,
+          });
           return {
             content: [
               {
                 type: "text" as const,
                 text: `${result.work_items.length} work item(s):\n\n${result.work_items
-                  .map((work) =>
-                    formatWorkListLine(work, (agentId) =>
-                      workParticipantDisplay(agentsById, myId!, agentId)
-                    )
-                  )
+                  .map((work) => formatWorkListLine(work, participantDisplay))
                   .join("\n")}`,
               },
             ],
@@ -1034,6 +1024,9 @@ export async function runPollingAdapter(
           }
 
           const agentsById = await listAgentsById();
+          const participantDisplay = createParticipantDisplay(agentsById.values(), {
+            selfId: myId,
+          });
           return {
             content: [
               {
@@ -1041,7 +1034,7 @@ export async function runPollingAdapter(
                 text: formatWorkDetailLines(
                   result.work,
                   result.events,
-                  (agentId) => workParticipantDisplay(agentsById, myId!, agentId)
+                  participantDisplay
                 ).join("\n"),
               },
             ],
