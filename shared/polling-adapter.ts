@@ -21,6 +21,7 @@ import {
 import {
   acknowledgeMessagesCompatible,
   brokerFetch,
+  isMissingAgentBrokerError,
   listAgentsCompatible,
   markMessagesSurfacedCompatible,
   messageHistoryCompatible,
@@ -215,7 +216,7 @@ function formatHistoryMessage(
 }
 
 function formatWhoAmI(identity: WhoAmIResponse): string {
-  return [
+  const lines = [
     "You are currently registered on claudy-talky as:",
     `- ID: ${identity.id}`,
     `- Name: ${identity.name}`,
@@ -225,7 +226,13 @@ function formatWhoAmI(identity: WhoAmIResponse): string {
     `- Git root: ${identity.git_root ?? "(none)"}`,
     `- TTY: ${identity.tty ?? "(unknown)"}`,
     `- Summary: ${identity.summary || "(empty)"}`,
-  ].join("\n");
+  ];
+
+  if ((identity as WhoAmIResponse & { broker_registered?: boolean }).broker_registered === false) {
+    lines.push("- Broker registration: missing; this session will re-register on the next broker write.");
+  }
+
+  return lines.join("\n");
 }
 
 async function resolveWorkspaceCwd(
@@ -271,8 +278,10 @@ export async function runPollingAdapter(
   let workspaceSource: "process-cwd" | "mcp-roots" = "process-cwd";
   let bufferedInbox: BufferedInboxMessage[] = [];
   let inboxSyncPromise: Promise<void> | null = null;
+  let registrationPromise: Promise<void> | null = null;
   let desktopNotificationWarningLogged = false;
   let initialSummary = "";
+  let myTty: string | null = null;
 
   const desktopNotifications =
     options.enableDesktopNotifications ?? desktopNotificationsEnabled();
@@ -555,6 +564,85 @@ export async function runPollingAdapter(
     return myAuthToken ? { ...body, auth_token: myAuthToken } : body;
   }
 
+  function registrationRequest() {
+    return {
+      pid: process.pid,
+      name: defaultAgentName(options.agentLabel, myCwd),
+      kind: options.agentKind,
+      transport: options.agentTransport ?? "mcp-stdio",
+      cwd: myCwd,
+      git_root: myGitRoot,
+      tty: myTty,
+      summary: initialSummary,
+      capabilities,
+      metadata: buildAgentMetadata({
+        client:
+          typeof options.metadata?.client === "string"
+            ? options.metadata.client
+            : options.agentLabel,
+        adapter: "claudy-talky",
+        adapterVersion: options.serverVersion,
+        clientVersion: options.clientVersion,
+        launcher: options.launcher,
+        notificationStyles: [
+          "manual-check",
+          "mcp-logging",
+          ...(desktopNotifications ? ["desktop-toast"] : []),
+          ...(options.notificationStyles ?? []),
+        ],
+        workspaceSource,
+        extra: options.metadata,
+      }),
+    };
+  }
+
+  async function registerSelf(reason: string): Promise<void> {
+    if (registrationPromise) {
+      await registrationPromise;
+      return;
+    }
+
+    registrationPromise = (async () => {
+      const previousId = myId;
+      const registration = await registerAgentCompatible(
+        brokerUrl,
+        registrationRequest()
+      );
+      myId = registration.id;
+      myAuthToken = registration.auth_token ?? null;
+      bufferedInbox = [];
+
+      if (previousId && previousId !== registration.id) {
+        log(`Re-registered as agent ${registration.id} (previous ${previousId}): ${reason}`);
+      } else if (!previousId) {
+        log(`Registered as agent ${registration.id}`);
+      } else {
+        log(`Refreshed broker registration for agent ${registration.id}: ${reason}`);
+      }
+    })().finally(() => {
+      registrationPromise = null;
+    });
+
+    await registrationPromise;
+  }
+
+  async function retryIfMissingRegistration<T>(
+    reason: string,
+    action: () => Promise<T>
+  ): Promise<T> {
+    try {
+      return await action();
+    } catch (error) {
+      if (!isMissingAgentBrokerError(error, myId)) {
+        throw error;
+      }
+
+      log(`Broker no longer has agent ${myId}: ${reason}`);
+      await registerSelf(`${reason} after broker registration disappeared`);
+      return action();
+    }
+  }
+
   async function syncInbox(notifyClient: boolean): Promise<void> {
     if (!myId) {
       return;
@@ -566,12 +654,15 @@ export async function runPollingAdapter(
     }
 
     inboxSyncPromise = (async () => {
-      const result = await brokerFetch<PollMessagesResponse>(
-        brokerUrl,
-        "/poll-messages",
-        withAuth({
-          id: myId!,
-        })
+      const result = await retryIfMissingRegistration(
+        "sync inbox",
+        () => brokerFetch<PollMessagesResponse>(
+          brokerUrl,
+          "/poll-messages",
+          withAuth({
+            id: myId!,
+          })
+        )
       );
 
       if (result.messages.length === 0) {
@@ -652,9 +743,9 @@ export async function runPollingAdapter(
           };
         }
 
-        const identity: WhoAmIResponse = {
-          id: myId,
-          name: defaultAgentName(options.agentLabel, myCwd),
+      const identity: WhoAmIResponse = {
+        id: myId,
+        name: defaultAgentName(options.agentLabel, myCwd),
           kind: options.agentKind,
           transport: options.agentTransport ?? "mcp-stdio",
           cwd: myCwd,
@@ -663,20 +754,22 @@ export async function runPollingAdapter(
           summary: initialSummary,
         };
 
-        try {
-          const byId = await listAgentsById();
-          const registered = byId.get(myId);
-          if (registered) {
+      try {
+        const byId = await listAgentsById();
+        const registered = byId.get(myId);
+        if (registered) {
             identity.name = registered.name;
             identity.kind = registered.kind;
             identity.transport = registered.transport;
             identity.cwd = registered.cwd;
             identity.git_root = registered.git_root;
-            identity.tty = registered.tty;
-            identity.summary = registered.summary;
-          }
-        } catch {
-          // Fall back to local process context.
+          identity.tty = registered.tty;
+          identity.summary = registered.summary;
+        } else {
+          (identity as WhoAmIResponse & { broker_registered?: boolean }).broker_registered = false;
+        }
+      } catch {
+        // Fall back to local process context.
         }
 
         return {
@@ -755,16 +848,19 @@ export async function runPollingAdapter(
         }
 
         try {
-          const result = await brokerFetch<SendMessageResponse>(
-            brokerUrl,
-            "/send-message",
-            withAuth({
-              from_id: myId,
-              to_id,
-              text: message,
-              conversation_id,
-              reply_to_message_id,
-            })
+          const result = await retryIfMissingRegistration(
+            "send message",
+            () => brokerFetch<SendMessageResponse>(
+              brokerUrl,
+              "/send-message",
+              withAuth({
+                from_id: myId!,
+                to_id,
+                text: message,
+                conversation_id,
+                reply_to_message_id,
+              })
+            )
           );
 
           if (!result.ok) {
@@ -815,15 +911,18 @@ export async function runPollingAdapter(
             limit?: number;
           };
 
-          const result = await messageHistoryCompatible(
-            brokerUrl,
-            withAuth({
-              agent_id: myId,
-              with_agent_id,
-              conversation_id,
-              limit,
-              mark_opened: true,
-            })
+          const result = await retryIfMissingRegistration(
+            "load message history",
+            () => messageHistoryCompatible(
+              brokerUrl,
+              withAuth({
+                agent_id: myId!,
+                with_agent_id,
+                conversation_id,
+                limit,
+                mark_opened: true,
+              })
+            )
           );
 
           if (result.messages.length === 0) {
@@ -876,17 +975,20 @@ export async function runPollingAdapter(
             limit?: number;
           };
 
-          const result = await brokerFetch<ListWorkResponse>(
-            brokerUrl,
-            "/list-work",
-            withAuth({
-              agent_id: myId,
-              status,
-              owner_id,
-              conversation_id,
-              include_done,
-              limit,
-            })
+          const result = await retryIfMissingRegistration(
+            "list work",
+            () => brokerFetch<ListWorkResponse>(
+              brokerUrl,
+              "/list-work",
+              withAuth({
+                agent_id: myId!,
+                status,
+                owner_id,
+                conversation_id,
+                include_done,
+                limit,
+              })
+            )
           );
 
           if (result.work_items.length === 0) {
@@ -937,15 +1039,18 @@ export async function runPollingAdapter(
             conversation_id?: string;
           };
 
-          const result = await brokerFetch<QueueWorkResponse>(
-            brokerUrl,
-            "/queue-work",
-            withAuth({
-              agent_id: myId,
-              summary,
-              title,
-              conversation_id,
-            })
+          const result = await retryIfMissingRegistration(
+            "queue work",
+            () => brokerFetch<QueueWorkResponse>(
+              brokerUrl,
+              "/queue-work",
+              withAuth({
+                agent_id: myId!,
+                summary,
+                title,
+                conversation_id,
+              })
+            )
           );
 
           if (!result.ok || !result.work) {
@@ -976,10 +1081,13 @@ export async function runPollingAdapter(
 
         try {
           const { work_id } = args as { work_id: number };
-          const result = await brokerFetch<GetWorkResponse>(
-            brokerUrl,
-            "/get-work",
-            withAuth({ agent_id: myId, work_id })
+          const result = await retryIfMissingRegistration(
+            "get work",
+            () => brokerFetch<GetWorkResponse>(
+              brokerUrl,
+              "/get-work",
+              withAuth({ agent_id: myId!, work_id })
+            )
           );
 
           if (!result.work) {
@@ -1034,17 +1142,20 @@ export async function runPollingAdapter(
             conversation_id?: string;
           };
 
-          const result = await brokerFetch<HandoffWorkResponse>(
-            brokerUrl,
-            "/handoff-work",
-            withAuth({
-              agent_id: myId,
-              to_id,
-              summary,
-              title,
-              conversation_id,
-              notify_message: true,
-            })
+          const result = await retryIfMissingRegistration(
+            "handoff work",
+            () => brokerFetch<HandoffWorkResponse>(
+              brokerUrl,
+              "/handoff-work",
+              withAuth({
+                agent_id: myId!,
+                to_id,
+                summary,
+                title,
+                conversation_id,
+                notify_message: true,
+              })
+            )
           );
 
           if (!result.ok || !result.work) {
@@ -1095,15 +1206,18 @@ export async function runPollingAdapter(
             note?: string;
           };
 
-          const result = await brokerFetch<AssignWorkResponse>(
-            brokerUrl,
-            "/assign-work",
-            withAuth({
-              agent_id: myId,
-              work_id,
-              to_id,
-              note,
-            })
+          const result = await retryIfMissingRegistration(
+            "assign work",
+            () => brokerFetch<AssignWorkResponse>(
+              brokerUrl,
+              "/assign-work",
+              withAuth({
+                agent_id: myId!,
+                work_id,
+                to_id,
+                note,
+              })
+            )
           );
 
           if (!result.ok || !result.work) {
@@ -1139,15 +1253,18 @@ export async function runPollingAdapter(
             note?: string;
           };
 
-          const result = await brokerFetch<UpdateWorkStatusResponse>(
-            brokerUrl,
-            "/update-work-status",
-            withAuth({
-              agent_id: myId,
-              work_id,
-              action,
-              note,
-            })
+          const result = await retryIfMissingRegistration(
+            "update work status",
+            () => brokerFetch<UpdateWorkStatusResponse>(
+              brokerUrl,
+              "/update-work-status",
+              withAuth({
+                agent_id: myId!,
+                work_id,
+                action,
+                note,
+              })
+            )
           );
 
           if (!result.ok || !result.work) {
@@ -1193,10 +1310,13 @@ export async function runPollingAdapter(
         }
 
         try {
-          await brokerFetch(
-            brokerUrl,
-            "/set-summary",
-            withAuth({ id: myId, summary })
+          await retryIfMissingRegistration(
+            "set summary",
+            () => brokerFetch(
+              brokerUrl,
+              "/set-summary",
+              withAuth({ id: myId!, summary })
+            )
           );
           return {
             content: [
@@ -1239,10 +1359,13 @@ export async function runPollingAdapter(
             };
           }
 
-          await acknowledgeMessagesCompatible(brokerUrl, withAuth({
-            id: myId,
-            message_ids: messages.map((entry) => entry.message.id),
-          }));
+          await retryIfMissingRegistration(
+            "acknowledge messages",
+            () => acknowledgeMessagesCompatible(brokerUrl, withAuth({
+              id: myId!,
+              message_ids: messages.map((entry) => entry.message.id),
+            }))
+          );
 
           return {
             content: [
@@ -1274,7 +1397,7 @@ export async function runPollingAdapter(
 
   await ensureBroker(brokerUrl, log);
 
-  const tty = getTty();
+  myTty = getTty();
 
   await mcp.connect(new StdioServerTransport());
   log("MCP connected");
@@ -1285,7 +1408,7 @@ export async function runPollingAdapter(
 
   log(`CWD: ${myCwd}`);
   log(`Git root: ${myGitRoot ?? "(none)"}`);
-  log(`TTY: ${tty ?? "(unknown)"}`);
+  log(`TTY: ${myTty ?? "(unknown)"}`);
 
   const summaryPromise = (async () => {
     try {
@@ -1314,39 +1437,7 @@ export async function runPollingAdapter(
     new Promise((resolve) => setTimeout(resolve, 3000)),
   ]);
 
-  const registration = await registerAgentCompatible(brokerUrl, {
-    pid: process.pid,
-    name: defaultAgentName(options.agentLabel, myCwd),
-    kind: options.agentKind,
-    transport: options.agentTransport ?? "mcp-stdio",
-    cwd: myCwd,
-    git_root: myGitRoot,
-    tty,
-    summary: initialSummary,
-    capabilities,
-    metadata: buildAgentMetadata({
-      client:
-        typeof options.metadata?.client === "string"
-          ? options.metadata.client
-          : options.agentLabel,
-      adapter: "claudy-talky",
-      adapterVersion: options.serverVersion,
-      clientVersion: options.clientVersion,
-      launcher: options.launcher,
-      notificationStyles: [
-        "manual-check",
-        "mcp-logging",
-        ...(desktopNotifications ? ["desktop-toast"] : []),
-        ...(options.notificationStyles ?? []),
-      ],
-      workspaceSource,
-      extra: options.metadata,
-    }),
-  });
-
-  myId = registration.id;
-  myAuthToken = registration.auth_token ?? null;
-  log(`Registered as agent ${myId}`);
+  await registerSelf("initial startup");
 
   if (!initialSummary) {
     summaryPromise.then(async () => {
@@ -1355,13 +1446,16 @@ export async function runPollingAdapter(
       }
 
       try {
-        await brokerFetch(
-          brokerUrl,
-          "/set-summary",
-          withAuth({
-            id: myId,
-            summary: initialSummary,
-          })
+        await retryIfMissingRegistration(
+          "late auto-summary",
+          () => brokerFetch(
+            brokerUrl,
+            "/set-summary",
+            withAuth({
+              id: myId!,
+              summary: initialSummary,
+            })
+          )
         );
         log(`Late auto-summary applied: ${initialSummary}`);
       } catch {
@@ -1380,7 +1474,10 @@ export async function runPollingAdapter(
     }
 
     try {
-      await brokerFetch(brokerUrl, "/heartbeat", withAuth({ id: myId }));
+      await retryIfMissingRegistration(
+        "heartbeat",
+        () => brokerFetch(brokerUrl, "/heartbeat", withAuth({ id: myId! }))
+      );
     } catch {
       // Best effort.
     }

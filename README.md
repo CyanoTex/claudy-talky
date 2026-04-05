@@ -478,7 +478,7 @@ bun run operator
 | --- | --- | --- |
 | `CLAUDY_TALKY_PORT` | `7899` | Broker port |
 | `CLAUDY_TALKY_DB` | Windows: `%LOCALAPPDATA%\\claudy-talky\\claudy-talky.db`; elsewhere: `~/.claudy-talky/claudy-talky.db` | Preferred SQLite database path. If it cannot be opened, the broker falls back to `.claudy-talky.db` in the current working directory, then to a temp directory. |
-| `CLAUDY_TALKY_STALE_AGENT_MS` | `15000` | How old an agent heartbeat can get before the broker removes it as stale |
+| `CLAUDY_TALKY_STALE_AGENT_MS` | `60000` | How old an agent heartbeat can get before the broker removes it as stale |
 | `CLAUDY_TALKY_CLEANUP_INTERVAL_MS` | `5000` | How often the broker sweeps for stale agents |
 | `CLAUDY_TALKY_DESKTOP_NOTIFICATIONS` | `true` | Set to `0`, `false`, or `off` to disable desktop notification fallback for polling-based clients |
 | `OPENAI_API_KEY` | — | Enables Claude auto-summary generation |
