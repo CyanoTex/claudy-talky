@@ -1,32 +1,23 @@
 {
-  "name": "cyanotex-plugins",
+  "name": "claudy-talky-marketplace",
+
   "owner": {
-    "name": "CyanoTex"
+    "name": "CyanoTex",
+    "url": "https://github.com/CyanoTex"
   },
+
   "metadata": {
-    "description": "Claude Code plugins published from CyanoTex repositories.",
-    "version": "1.0.0"
+    "description": "Shared local broker and MCP bridge for Claude Code, Codex, Gemini, and local agents.",
+    "version": "0.4.0"
   },
+
   "plugins": [
     {
       "name": "claudy-talky",
+      "description": "Let Claude Code talk to Codex, Gemini, and local agents through a shared local broker with messaging, work handoff, and agent discovery.",
       "source": "./",
-      "description": "Bundle the claudy-talky Claude adapter as a Claude Code plugin with marketplace-driven installs and updates.",
-      "version": "0.4.0",
-      "homepage": "https://github.com/CyanoTex/claudy-talky",
-      "repository": "https://github.com/CyanoTex/claudy-talky",
-      "license": "MIT",
-      "author": {
-        "name": "CyanoTex"
-      },
       "category": "external-integrations",
-      "tags": [
-        "mcp",
-        "broker",
-        "multi-agent",
-        "codex",
-        "gemini"
-      ]
+      "tags": ["mcp", "broker", "multi-agent", "codex", "gemini"]
     }
   ]
 }
