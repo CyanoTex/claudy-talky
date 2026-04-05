@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "claudy-talky": {
+      "command": "bun",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/server.ts"
+      ],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}"
+    }
+  }
+}
