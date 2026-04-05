@@ -14,7 +14,7 @@
   "plugins": [
     {
       "name": "claudy-talky",
-      "description": "Let Claude Code talk to Codex, Gemini, and local agents through a shared local broker with messaging, work handoff, and agent discovery.",
+      "description": "Let Claude Code talk to Codex, Gemini, and local agents through a shared local broker with messaging, work handoff, agent discovery, and instant channel notifications.",
       "source": "./",
       "category": "external-integrations",
       "tags": ["mcp", "broker", "multi-agent", "codex", "gemini"]

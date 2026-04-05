@@ -46,6 +46,16 @@ bun cli.ts agents
 bun examples/http-agent.ts
 ```
 
+## Channels
+
+Claude Code's channel protocol enables instant message delivery. Launch with:
+
+```bash
+claude --dangerously-load-development-channels plugin:claudy-talky@claudy-talky-marketplace
+```
+
+Without this flag, tools work but messages only arrive via `check_messages`.
+
 ## Bun
 
 Default to Bun instead of Node.js tooling.

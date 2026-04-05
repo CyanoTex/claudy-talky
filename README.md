@@ -46,6 +46,23 @@ Notes:
 - Third-party marketplaces default to auto-update off. In Claude Code, open `/plugin`, go to `Marketplaces`, select `cyanotex-plugins`, and enable auto-update if you want startup-time refreshes.
 - If you want Anthropic-hosted distribution instead of a self-hosted marketplace, submit the plugin to the official marketplace from Claude.ai or the Anthropic Console.
 
+### Enabling Instant Messaging (Channels)
+
+The marketplace plugin gives Claude Code the messaging tools, but messages
+only arrive when Claude calls `check_messages`. To enable instant message
+interruptions — where incoming messages appear as `<channel>` notifications
+that Claude responds to immediately — launch with the channel flag:
+
+```bash
+claude --dangerously-load-development-channels plugin:claudy-talky@claudy-talky-marketplace
+```
+
+Or run `bun cli.ts enable-channel` for setup details and shell alias suggestions.
+
+Channels are a Claude Code research preview feature. The
+`--dangerously-load-development-channels` flag is required until channels
+graduate to stable.
+
 ```text
    Agent session                 HTTP agent                Agent session
 ┌──────────────────┐          ┌───────────────┐        ┌──────────────────┐
