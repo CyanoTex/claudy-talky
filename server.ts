@@ -29,6 +29,7 @@ import {
   replyToMessageIdValue,
 } from "./shared/message-format.ts";
 import {
+  formatWorkActionResult,
   formatWorkDetailLines,
   formatWorkListLine,
 } from "./shared/work-format.ts";
@@ -941,8 +942,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        const agentsById = await listAgentsById();
         return {
-          content: [{ type: "text" as const, text: `Queued work #${result.work.id}.` }],
+          content: [
+            {
+              type: "text" as const,
+              text: formatWorkActionResult(
+                `Queued work #${result.work.id}.`,
+                result.work,
+                (agentId) => workParticipantDisplay(agentsById, myId!, agentId)
+              ),
+            },
+          ],
         };
       } catch (error) {
         return {
@@ -1048,11 +1059,26 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        const agentsById = await listAgentsById();
+        const participantDisplay = (agentId: string) =>
+          workParticipantDisplay(agentsById, myId!, agentId);
         return {
           content: [
             {
               type: "text" as const,
-              text: `Created handoff #${result.work.id} for agent ${to_id}${result.notification_message ? ` (message #${result.notification_message.id}, conversation ${result.notification_message.conversation_id})` : ""}`,
+              text: formatWorkActionResult(
+                `Created handoff #${result.work.id} for ${participantDisplay(to_id)}.`,
+                result.work,
+                participantDisplay,
+                result.notification_message
+                  ? {
+                      notificationMessage: {
+                        id: result.notification_message.id,
+                        conversation_id: result.notification_message.conversation_id,
+                      },
+                    }
+                  : undefined
+              ),
             },
           ],
         };
@@ -1105,8 +1131,22 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        const agentsById = await listAgentsById();
+        const participantDisplay = (agentId: string) =>
+          workParticipantDisplay(agentsById, myId!, agentId);
         return {
-          content: [{ type: "text" as const, text: to_id ? `Assigned work #${result.work.id} to agent ${to_id}.` : `Returned work #${result.work.id} to the queue.` }],
+          content: [
+            {
+              type: "text" as const,
+              text: formatWorkActionResult(
+                to_id
+                  ? `Assigned work #${result.work.id} to ${participantDisplay(to_id)}.`
+                  : `Returned work #${result.work.id} to the queue.`,
+                result.work,
+                participantDisplay
+              ),
+            },
+          ],
         };
       } catch (error) {
         return {
@@ -1157,11 +1197,16 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        const agentsById = await listAgentsById();
         return {
           content: [
             {
               type: "text" as const,
-              text: `Updated work #${result.work.id} to ${result.work.status}.`,
+              text: formatWorkActionResult(
+                `Updated work #${result.work.id} to ${result.work.status}.`,
+                result.work,
+                (agentId) => workParticipantDisplay(agentsById, myId!, agentId)
+              ),
             },
           ],
         };

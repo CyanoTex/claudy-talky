@@ -56,7 +56,7 @@ async function registerCliAgent(): Promise<RegisterAgentResponse> {
     name: "claudy-talky CLI",
     kind: "cli-client",
     transport: "cli",
-    summary: "Ephemeral CLI operator session.",
+    summary: "Ephemeral CLI messaging session.",
     capabilities: ["messaging", "ephemeral"],
     metadata: {
       client: "claudy-talky CLI",
