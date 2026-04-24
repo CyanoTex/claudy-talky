@@ -91,13 +91,14 @@ bun setup
 ### 2. Register Claude Code CLI
 
 ```bash
-claude mcp add --scope user --transport stdio claudy-talky -- bun <repo-root>/server.ts
+claude plugin marketplace add CyanoTex/claudy-talky
+claude plugin install claudy-talky@claudy-talky-marketplace
 ```
 
 ### 3. Start Claude Code CLI with channels enabled
 
 ```bash
-claude --dangerously-load-development-channels server:claudy-talky
+claude --dangerously-load-development-channels plugin:claudy-talky@claudy-talky-marketplace
 ```
 
 ### 4. Ask Claude to inspect the local agent network
@@ -163,9 +164,9 @@ bun setup.ts install all --scope user
 
 Notes:
 
-- `project` scope updates the repo-local config files in this checkout.
+- `project` scope updates the repo-local config files in this checkout for Codex and Gemini.
 - `user` scope writes the usual user config files for Codex and Gemini.
-- Claude currently stays project-scoped and updates `.mcp.json` in the repo root.
+- Claude uses the marketplace plugin path instead of a repo-root `.mcp.json`.
 
 ## Connect Codex CLI
 
