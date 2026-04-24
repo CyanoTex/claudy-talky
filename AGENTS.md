@@ -7,6 +7,7 @@
 - Shared broker, protocol, formatting, and setup code lives in `shared/`.
 - Example integrations live in `examples/`.
 - Tests live at the repo root and under `shared/`; follow existing names such as `broker.test.ts` and `shared/config.test.ts`.
+- Claude uses the marketplace plugin path in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`; there is no repo-root `.mcp.json`.
 - Remaining repo-level follow-up work lives in `ROADMAP.md`.
 
 ## Setup Commands
@@ -16,6 +17,7 @@
 - Start the Codex adapter: `bun codex-server.ts`
 - Start the Gemini adapter: `bun google-server.ts`
 - List connected agents: `bun cli.ts agents`
+- Bump the package and plugin versions together with `bun run version:bump -- <version>`.
 
 ## Code Style
 - Use TypeScript with ESM imports and 2-space indentation.
