@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "claudy-talky": {
-      "command": "bun",
-      "args": ["./server.ts"]
-    }
-  }
-}
