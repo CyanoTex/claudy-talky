@@ -695,6 +695,7 @@ function normalizeWorkAction(
     case "block":
     case "done":
     case "activate":
+    case "requeue":
       return action;
     default:
       return null;
@@ -1664,6 +1665,22 @@ function handleUpdateWorkStatus(
       nextStatus = "active";
       blockerNote = null;
       eventKind = "status";
+      break;
+    case "requeue":
+      if (
+        !isAdmin &&
+        currentWork.owner_id !== body.agent_id &&
+        !(currentWork.owner_id === null && currentWork.created_by_id === body.agent_id)
+      ) {
+        return {
+          ok: false,
+          error: `Work item #${workId} is owned by ${currentWork.owner_id ?? "the queue"}. Only the owner, queue creator, or a work admin can requeue it.`,
+        };
+      }
+      nextOwnerId = null;
+      nextStatus = "queued";
+      blockerNote = null;
+      eventKind = "queue";
       break;
   }
 

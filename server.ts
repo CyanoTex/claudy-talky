@@ -340,7 +340,7 @@ Available tools:
 - get_work: Inspect one work item in detail
 - handoff_work: Hand work to another agent and notify them
 - assign_work: Reassign work to another agent or return it to the queue
-- update_work_status: Take, block, or complete a work item
+- update_work_status: Take, block, complete, activate, or requeue a work item
 - set_summary: Set a 1-2 sentence summary of what you're working on
 - check_messages: Manually check for new messages
 
@@ -566,7 +566,7 @@ const TOOLS = [
   {
     name: "update_work_status",
     description:
-      "Update a work item by taking it, blocking it, marking it done, or returning it to active.",
+      "Update a work item by taking it, blocking it, marking it done, returning it to active, or requeueing it.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -576,7 +576,7 @@ const TOOLS = [
         },
         action: {
           type: "string" as const,
-          enum: ["take", "block", "done", "activate"],
+          enum: ["take", "block", "done", "activate", "requeue"],
           description: "Status transition to apply.",
         },
         note: {
@@ -1167,7 +1167,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       try {
         const { work_id, action, note } = args as {
           work_id: number;
-          action: "take" | "block" | "done" | "activate";
+          action: "take" | "block" | "done" | "activate" | "requeue";
           note?: string;
         };
 

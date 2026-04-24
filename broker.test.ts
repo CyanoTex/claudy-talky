@@ -843,6 +843,22 @@ test("creates handoffs, tracks work state, and records work events", async () =>
   expect(blocked.work?.status).toBe("blocked");
   expect(blocked.work?.blocker_note).toBe("Waiting on repro steps");
 
+  const requeued = await brokerFetch<{
+    ok: boolean;
+    work?: { status: string; owner_id: string | null; blocker_note: string | null };
+  }>("/update-work-status", {
+    agent_id: codex.id,
+    work_id: handoff.work?.id,
+    action: "requeue",
+    note: "Back to the queue",
+    auth_token: codex.auth_token,
+  });
+
+  expect(requeued.ok).toBe(true);
+  expect(requeued.work?.status).toBe("queued");
+  expect(requeued.work?.owner_id).toBeNull();
+  expect(requeued.work?.blocker_note).toBeNull();
+
   const geminiDoneRejected = await brokerFetch<{
     ok: boolean;
     error?: string;
@@ -855,7 +871,7 @@ test("creates handoffs, tracks work state, and records work events", async () =>
   });
 
   expect(geminiDoneRejected.ok).toBe(false);
-  expect(geminiDoneRejected.error).toContain(codex.id);
+  expect(geminiDoneRejected.error).toContain("unassigned");
 
   const adminAssign = await brokerFetch<{
     ok: boolean;
@@ -910,6 +926,7 @@ test("creates handoffs, tracks work state, and records work events", async () =>
     "handoff",
     "take",
     "block",
+    "queue",
     "assign",
     "done",
   ]);
