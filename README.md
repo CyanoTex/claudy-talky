@@ -131,14 +131,14 @@ The MCP adapters support a lightweight broker-backed work layer on top of normal
 - `list_work` filters active or historical work by owner, status, or conversation.
 - `get_work` shows one work item and its event history.
 - `assign_work` reassigns work to another agent or returns it to the queue.
-- `update_work_status` marks work taken, blocked, done, or active again.
+- `update_work_status` marks work taken, blocked, done, active again, or requeued.
 
 Handoffs stay linked to the current conversation when one is active, so the work item and its discussion stay tied together.
 
 Ownership is enforced at the broker:
 
 - `take` only works if the work is unassigned or already assigned to you
-- `block`, `done`, and `activate` only work for the current owner
+- `block`, `done`, `activate`, and `requeue` only work for the current owner unless the caller is a work admin
 - agents with `work_admin` capability can reassign work or override ownership transitions when needed
 - queued work uses the explicit `queued` state rather than overloading `assigned`
 
@@ -275,7 +275,7 @@ z.ai looks possible as a provider layer, but not yet as a first-class `claudy-ta
 | `get_work` | Inspect one work item plus its event history |
 | `handoff_work` | Create a work handoff for another agent, optionally linked to a thread |
 | `assign_work` | Reassign work to another agent or return it to the queue |
-| `update_work_status` | Mark a work item taken, blocked, done, or otherwise update its state |
+| `update_work_status` | Mark a work item taken, blocked, done, active again, requeued, or otherwise update its state |
 | `set_summary` | Publish a short description of Claude's current work |
 | `check_messages` | Manually check for inbound messages |
 | `list_peers` | Backward-compatible alias for `list_agents` |

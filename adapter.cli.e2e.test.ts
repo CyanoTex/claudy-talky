@@ -651,6 +651,30 @@ for (const config of CLI_ADAPTERS) {
       );
       expect(workTakeText).toContain(`Updated work #${adapterWorkId} to active.`);
 
+      const workRequeueText = textContent(
+        await session.client.callTool({
+          name: "update_work_status",
+          arguments: {
+            work_id: adapterWorkId,
+            action: "requeue",
+            note: "return to queue in e2e",
+          },
+        })
+      );
+      expect(workRequeueText).toContain(`Updated work #${adapterWorkId} to queued.`);
+      expect(workRequeueText).toContain("owner=queue");
+
+      const workRetakeText = textContent(
+        await session.client.callTool({
+          name: "update_work_status",
+          arguments: {
+            work_id: adapterWorkId,
+            action: "take",
+          },
+        })
+      );
+      expect(workRetakeText).toContain(`Updated work #${adapterWorkId} to active.`);
+
       const workDoneText = textContent(
         await session.client.callTool({
           name: "update_work_status",

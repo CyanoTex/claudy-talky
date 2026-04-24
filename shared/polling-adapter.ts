@@ -494,7 +494,7 @@ export async function runPollingAdapter(
     {
       name: "update_work_status",
       description:
-        "Update a work item by taking it, blocking it, marking it done, or returning it to active.",
+        "Update a work item by taking it, blocking it, marking it done, returning it to active, or requeueing it.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -504,7 +504,7 @@ export async function runPollingAdapter(
           },
           action: {
             type: "string" as const,
-            enum: ["take", "block", "done", "activate"],
+            enum: ["take", "block", "done", "activate", "requeue"],
             description: "Status transition to apply.",
           },
           note: {
@@ -1294,7 +1294,7 @@ export async function runPollingAdapter(
         try {
           const { work_id, action, note } = args as {
             work_id: number;
-            action: "take" | "block" | "done" | "activate";
+            action: "take" | "block" | "done" | "activate" | "requeue";
             note?: string;
           };
 

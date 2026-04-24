@@ -260,7 +260,7 @@ export interface AssignWorkResponse {
 export interface UpdateWorkStatusRequest {
   agent_id: AgentId;
   work_id: number;
-  action: "take" | "block" | "done" | "activate";
+  action: "take" | "block" | "done" | "activate" | "requeue";
   note?: string | null;
   auth_token?: string;
 }

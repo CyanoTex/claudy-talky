@@ -11,6 +11,7 @@ This file tracks the remaining follow-up work after the current broker and CLI c
 ## Recently Landed
 
 - Added scan-friendly MCP work item formatting with owner, relative update age, conversation hints, blocker previews, event ages, status-specific next-step guidance, and richer mutation responses after queue, handoff, assign, and status updates.
+- Added `requeue` as a direct `update_work_status` action so owners and work admins can release work back to the queue without switching tools.
 
 ## Suggested Shape
 
@@ -19,7 +20,7 @@ Future follow-up can still split into three layers if needed.
 ### Task UX
 
 - Continue improving task list and detail presentation in MCP tool output where real use exposes gaps.
-- Faster assignment, takeover, and requeue flows where the broker API needs them.
+- Continue refining assignment, takeover, and requeue flows where real use exposes gaps.
 - Clearer task state visibility for polling-based adapters.
 
 ### Collaboration Model
