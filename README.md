@@ -112,113 +112,34 @@ Then:
 Call `whoami`, then send a message to agent <id>: "what are you working on?"
 ```
 
-### 5. Join the network yourself from the terminal
+### 5. Inspect or send from the terminal
 
 ```bash
-bun run operator
+bun cli.ts status
+bun cli.ts agents
+bun cli.ts send <agent-id> "what are you working on?"
 ```
 
-The default operator client registers you as a `human-operator` agent and opens the current full-screen operator TUI with:
-
-- a live agent list with unread badges
-- a room list for shared conversations
-- a thread pane for the active DM or room
-- an Actions strip for common shortcuts
-- a composer with direct typing and slash-command fallback
-
-The default operator is now the Ink implementation in `operator.ts`.
-
-Primary interactions:
-
-```text
-Tab / Shift+Tab              Cycle agents, rooms, thread, and composer
-Left / Right                 Move across the Actions strip
-Enter                        Open the selected agent/room or send composer text
-Esc                          Leave edit mode and preserve the current draft
-Ctrl+A                       Jump straight to the Actions strip
-d                            Open the selected agent DM
-o                            Open the selected room
-r                            Reply to the last inbound sender
-l                            Leave the current DM or room
-v                            Cycle minimal, compact, and verbose message details
-F5                           Refresh agents and the current thread
-F10                          Quit immediately
-Ctrl+C                       Quit immediately
-```
-
-Slash commands still work in the composer:
-
-```text
-/agents
-/tasks
-/details [minimal|compact|verbose]
-/dm <agent-ref-or-name> [message]
-/msg <agent-ref-or-name> <message>
-/queue <summary>
-/queue-work <summary>
-/handoff <agent-ref-or-name> <summary>
-/handoff-work <agent-ref-or-name> <summary>
-/assign <work-id> <agent-ref-or-name> [note]
-/assign-work <work-id> <agent-ref-or-name> [note]
-/requeue <work-id> [note]
-/work [open|all|mine|queued|assigned|active|blocked|done|<id>]
-/list-work [open|all|mine|queued|assigned|active|blocked|done|<id>]
-/get-work <work-id>
-/take <work-id>
-/block <work-id> <reason>
-/done <work-id> [note]
-/activate <work-id> [note]
-/update-work-status <work-id> <take|block|done|activate> [note]
-/reply
-/leave
-/room create everyone all
-/room create triage codex gemini
-/dm "Codex @ claudy-talky"
-/room use <name-or-conversation-id>
-/rooms
-/participants
-/history 30
-/context
-/quit
-/exit
-```
-
-Plain text in the composer sends to the current DM or room.
-
-`/agents` prints human-friendly refs such as `claude:claudy-talky`, `codex:docs`, or `gemini`, and the operator commands accept those refs, exact IDs, or quoted full names.
+`cli.ts` is intentionally small: it inspects the broker, lists connected agents, sends one-off messages, stops the local broker, and prints channel setup guidance. Day-to-day collaboration happens through the Claude, Codex, and Gemini MCP tools.
 
 ### Work handoffs
 
-The operator and CLI adapters support a lightweight broker-backed work layer on top of normal threads:
+The MCP adapters support a lightweight broker-backed work layer on top of normal threads:
 
-- `/tasks`
-- `/queue Investigate stale operator registrations`
-- `/queue-work Investigate stale operator registrations`
-- `/handoff codex Investigate stale operator registrations`
-- `/handoff-work codex Investigate stale operator registrations`
-- `/work mine`
-- `/work queued`
-- `/list-work blocked`
-- `/get-work 12`
-- `/work 12`
-- `/assign 12 codex hand off after triage`
-- `/assign-work 12 codex hand off after triage`
-- `/requeue 12 waiting for pickup`
-- `/take 12`
-- `/block 12 Waiting on broker logs`
-- `/done 12 Fixed in operator.ts`
-- `/activate 12 Ready for another pass`
-- `/update-work-status 12 block Waiting on broker logs`
+- `queue_work` creates queued work without assigning it yet.
+- `handoff_work` assigns work to another agent and can notify them in-thread.
+- `list_work` filters active or historical work by owner, status, or conversation.
+- `get_work` shows one work item and its event history.
+- `assign_work` reassigns work to another agent or returns it to the queue.
+- `update_work_status` marks work taken, blocked, done, or active again.
 
-Handoffs stay linked to the current DM or room conversation when one is active, so the work item and its discussion stay tied together.
-
-The operator also has a `[T] Tasks` action that opens a grouped task overview in the thread/detail view, so queued, assigned, active, and blocked work can be inspected without leaving the current operator UI.
+Handoffs stay linked to the current conversation when one is active, so the work item and its discussion stay tied together.
 
 Ownership is enforced at the broker:
 
 - `take` only works if the work is unassigned or already assigned to you
 - `block`, `done`, and `activate` only work for the current owner
-- the built-in human operator can reassign work or override ownership transitions when needed
+- agents with `work_admin` capability can reassign work or override ownership transitions when needed
 - queued work uses the explicit `queued` state rather than overloading `assigned`
 
 ## Roadmap
@@ -483,8 +404,7 @@ curl -X POST http://127.0.0.1:7899/unregister \
 - `server.ts` is the Claude adapter. It exposes MCP tools, tracks surfaced-vs-seen receipts, keeps a local unread buffer, and turns inbound messages into Claude channel notifications.
 - `codex-server.ts` is the Codex adapter. It exposes the same broker tools with background inbox polling, thread history, and desktop notification fallback.
 - `google-server.ts` is the Gemini CLI adapter. It exposes the same broker tools with background inbox polling, thread history, and desktop notification fallback.
-- `cli.ts` is a local utility for inspecting agents and sending messages.
-- `operator.ts` is the current Ink-based operator.
+- `cli.ts` is a local utility for inspecting agents, sending one-off messages, and stopping the broker.
 - `setup.ts` writes bundled project or user MCP config entries for the supported clients.
 - `examples/http-agent.ts` shows how a non-Claude agent can join the network.
 - `shared/agent-format.ts` renders consistent agent listings with inbox counts and metadata.
@@ -506,7 +426,6 @@ bun cli.ts agents
 bun cli.ts peers
 bun cli.ts send <agent-id> "<message>"
 bun cli.ts kill-broker
-bun run operator
 ```
 
 ## Configuration
@@ -538,6 +457,3 @@ Legacy `CLAUDE_PEERS_PORT` and `CLAUDE_PEERS_DB` env vars are still accepted as 
 
 [claude-peers](https://github.com/louislva/claude-peers-mcp) - Original.
 
-[Ink](https://github.com/vadimdemedes/ink) - Now powering the remake of Operator TUI.
-
-[neo-neo-blessed](https://github.com/eirikb/neo-neo-blessed) - Too troublesome. Blame Codex.

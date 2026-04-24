@@ -4,10 +4,9 @@
 
 ## Project Layout
 - Root entrypoints: `broker.ts`, `server.ts`, `codex-server.ts`, `google-server.ts`, `cli.ts`, and `setup.ts`.
-- Use `operator.ts` as the default Ink-based operator entrypoint.
 - Shared broker, protocol, formatting, and setup code lives in `shared/`.
 - Example integrations live in `examples/`.
-- Tests live at the repo root and under `shared/`; follow existing names such as `broker.test.ts` and `shared/operator-command.test.ts`.
+- Tests live at the repo root and under `shared/`; follow existing names such as `broker.test.ts` and `shared/config.test.ts`.
 - Remaining repo-level follow-up work lives in `ROADMAP.md`.
 
 ## Setup Commands
@@ -16,19 +15,18 @@
 - Start the Claude adapter: `bun server.ts`
 - Start the Codex adapter: `bun codex-server.ts`
 - Start the Gemini adapter: `bun google-server.ts`
-- Start the current operator: `bun run operator`
 - List connected agents: `bun cli.ts agents`
 
 ## Code Style
 - Use TypeScript with ESM imports and 2-space indentation.
 - Prefer small functions and explicit request or response types.
 - Reuse helpers from `shared/` before adding new protocol or formatting logic.
-- Keep filenames descriptive and lowercase, for example `operator.ts` and `broker.start-lock.test.ts`.
+- Keep filenames descriptive and lowercase, for example `broker.start-lock.test.ts` and `shared/work-format.ts`.
 
 ## Testing Instructions
 - Run `bun test`.
 - Run `bun x tsc --noEmit`.
-- Add or update a focused test file for each broker, parser, lifecycle, or shared-helper change, following existing names such as `broker.test.ts` or `shared/operator-command.test.ts`.
+- Add or update a focused test file for each broker, parser, lifecycle, or shared-helper change, following existing names such as `broker.test.ts` or `shared/config.test.ts`.
 - Prefer regression tests tied to the exact behavior you changed.
 
 ## Workflow Rules
@@ -38,7 +36,7 @@
 - Open PRs only when the branch has a coherent scope; use a draft PR for exploratory or incomplete work.
 
 ## PR Instructions
-- Use short imperative commit subjects, for example `Tighten ANSI operator controls`.
+- Use short imperative commit subjects, for example `Tighten broker work controls`.
 - Keep each commit scoped to one change set.
 - PR once, review twice: do one self-review for code correctness and one pass for user-facing behavior, docs, and regressions before asking for merge.
 - `main` is protected. Work on a branch and merge through a PR; do not plan on direct pushes.

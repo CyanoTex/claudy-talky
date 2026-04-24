@@ -586,12 +586,12 @@ test("re-registering the same parent session replaces the older broker row", asy
 });
 
 test("admin removal deletes an agent row without the agent auth token", async () => {
-  const operator = await brokerFetch<{ id: string; auth_token?: string }>(
+  const workAdmin = await brokerFetch<{ id: string; auth_token?: string }>(
     "/register-agent",
     {
-      name: "Operator",
+      name: "Work Admin",
       kind: "human-operator",
-      transport: "ink-tui",
+      transport: "test-admin",
       capabilities: ["work_admin"],
     }
   );
@@ -608,9 +608,9 @@ test("admin removal deletes an agent row without the agent auth token", async ()
   const removed = await brokerFetch<{ ok: boolean; removed: boolean }>(
     "/admin-remove-agent",
     {
-      agent_id: operator.id,
+      agent_id: workAdmin.id,
       target_id: target.id,
-      auth_token: operator.auth_token,
+      auth_token: workAdmin.auth_token,
     }
   );
 
@@ -625,12 +625,12 @@ test("admin removal deletes an agent row without the agent auth token", async ()
 });
 
 test("admin removal rejects unauthenticated callers", async () => {
-  const operator = await brokerFetch<{ id: string; auth_token?: string }>(
+  const workAdmin = await brokerFetch<{ id: string; auth_token?: string }>(
     "/register-agent",
     {
-      name: "Operator",
+      name: "Work Admin",
       kind: "human-operator",
-      transport: "ink-tui",
+      transport: "test-admin",
       capabilities: ["work_admin"],
     }
   );
@@ -648,7 +648,7 @@ test("admin removal rejects unauthenticated callers", async () => {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      agent_id: operator.id,
+      agent_id: workAdmin.id,
       target_id: target.id,
       auth_token: "wrong-token",
     }),
@@ -660,12 +660,12 @@ test("admin removal rejects unauthenticated callers", async () => {
 });
 
 test("creates handoffs, tracks work state, and records work events", async () => {
-  const operator = await brokerFetch<{ id: string; auth_token?: string }>(
+  const workAdmin = await brokerFetch<{ id: string; auth_token?: string }>(
     "/register-agent",
     {
-      name: "Operator",
+      name: "Work Admin",
       kind: "human-operator",
-      transport: "ink-tui",
+      transport: "test-admin",
       capabilities: ["messaging"],
       summary: "Running work handoffs.",
     }
@@ -707,10 +707,10 @@ test("creates handoffs, tracks work state, and records work events", async () =>
       text: string;
     };
   }>("/handoff-work", {
-    agent_id: operator.id,
+    agent_id: workAdmin.id,
     to_id: codex.id,
-    summary: "Fix operator work handoff UX",
-    auth_token: operator.auth_token,
+    summary: "Fix work handoff UX",
+    auth_token: workAdmin.auth_token,
     notify_message: true,
   });
 
@@ -728,7 +728,7 @@ test("creates handoffs, tracks work state, and records work events", async () =>
   });
 
   expect(handoffMessage.messages).toHaveLength(1);
-  expect(handoffMessage.messages[0]?.text).toContain("Fix operator work handoff UX");
+  expect(handoffMessage.messages[0]?.text).toContain("Fix work handoff UX");
   expect(handoffMessage.messages[0]?.conversation_id).toBe(
     handoff.work?.conversation_id ?? undefined
   );
@@ -736,10 +736,10 @@ test("creates handoffs, tracks work state, and records work events", async () =>
   const listed = await brokerFetch<{
     work_items: Array<{ id: number; owner_id: string | null; status: string }>;
   }>("/list-work", {
-    agent_id: operator.id,
+    agent_id: workAdmin.id,
     owner_id: codex.id,
     include_done: true,
-    auth_token: operator.auth_token,
+    auth_token: workAdmin.auth_token,
   });
 
   expect(listed.work_items.some((work) => work.id === handoff.work?.id)).toBe(true);
@@ -753,9 +753,9 @@ test("creates handoffs, tracks work state, and records work events", async () =>
     } | null;
     events: Array<{ kind: string; status: string | null; note: string | null }>;
   }>("/get-work", {
-    agent_id: operator.id,
+    agent_id: workAdmin.id,
     work_id: handoff.work?.id,
-    auth_token: operator.auth_token,
+    auth_token: workAdmin.auth_token,
   });
 
   expect(detail.work?.id).toBe(handoff.work?.id);
@@ -766,9 +766,9 @@ test("creates handoffs, tracks work state, and records work events", async () =>
     ok: boolean;
     work?: { id: number; owner_id: string | null; status: string };
   }>("/queue-work", {
-    agent_id: operator.id,
+    agent_id: workAdmin.id,
     summary: "Investigate queue pickup flow",
-    auth_token: operator.auth_token,
+    auth_token: workAdmin.auth_token,
   });
 
   expect(queued.ok).toBe(true);
@@ -778,9 +778,9 @@ test("creates handoffs, tracks work state, and records work events", async () =>
   const queuedList = await brokerFetch<{
     work_items: Array<{ id: number; status: string }>;
   }>("/list-work", {
-    agent_id: operator.id,
+    agent_id: workAdmin.id,
     status: "queued",
-    auth_token: operator.auth_token,
+    auth_token: workAdmin.auth_token,
   });
 
   expect(queuedList.work_items.some((work) => work.id === queued.work?.id)).toBe(true);
@@ -802,11 +802,11 @@ test("creates handoffs, tracks work state, and records work events", async () =>
     ok: boolean;
     work?: { owner_id: string | null; status: string };
   }>("/assign-work", {
-    agent_id: operator.id,
+    agent_id: workAdmin.id,
     work_id: queued.work?.id,
     to_id: codex.id,
     note: "Pick this up next",
-    auth_token: operator.auth_token,
+    auth_token: workAdmin.auth_token,
   });
 
   expect(assignQueued.ok).toBe(true);
@@ -861,39 +861,39 @@ test("creates handoffs, tracks work state, and records work events", async () =>
     ok: boolean;
     work?: { status: string; owner_id: string | null; blocker_note: string | null };
   }>("/assign-work", {
-    agent_id: operator.id,
+    agent_id: workAdmin.id,
     work_id: handoff.work?.id,
-    to_id: operator.id,
-    note: "Taking over as operator",
-    auth_token: operator.auth_token,
+    to_id: workAdmin.id,
+    note: "Taking over as work admin",
+    auth_token: workAdmin.auth_token,
   });
 
   expect(adminAssign.ok).toBe(true);
   expect(adminAssign.work?.status).toBe("assigned");
-  expect(adminAssign.work?.owner_id).toBe(operator.id);
+  expect(adminAssign.work?.owner_id).toBe(workAdmin.id);
 
   const done = await brokerFetch<{
     ok: boolean;
     work?: { status: string; blocker_note: string | null; owner_id: string | null };
   }>("/update-work-status", {
-    agent_id: operator.id,
+    agent_id: workAdmin.id,
     work_id: handoff.work?.id,
     action: "done",
     note: "Shipped",
-    auth_token: operator.auth_token,
+    auth_token: workAdmin.auth_token,
   });
 
   expect(done.ok).toBe(true);
   expect(done.work?.status).toBe("done");
   expect(done.work?.blocker_note).toBeNull();
-  expect(done.work?.owner_id).toBe(operator.id);
+  expect(done.work?.owner_id).toBe(workAdmin.id);
 
   const doneHidden = await brokerFetch<{
     work_items: Array<{ id: number }>;
   }>("/list-work", {
-    agent_id: operator.id,
+    agent_id: workAdmin.id,
     owner_id: codex.id,
-    auth_token: operator.auth_token,
+    auth_token: workAdmin.auth_token,
   });
 
   expect(doneHidden.work_items.some((work) => work.id === handoff.work?.id)).toBe(false);
@@ -901,9 +901,9 @@ test("creates handoffs, tracks work state, and records work events", async () =>
   const finalDetail = await brokerFetch<{
     events: Array<{ kind: string; status: string | null; note: string | null }>;
   }>("/get-work", {
-    agent_id: operator.id,
+    agent_id: workAdmin.id,
     work_id: handoff.work?.id,
-    auth_token: operator.auth_token,
+    auth_token: workAdmin.auth_token,
   });
 
   expect(finalDetail.events.map((event) => event.kind)).toEqual([

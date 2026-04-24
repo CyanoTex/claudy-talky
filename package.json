@@ -9,7 +9,6 @@
   "scripts": {
     "broker": "bun broker.ts",
     "server": "bun server.ts",
-    "operator": "bun operator.ts",
     "setup": "bun setup.ts install cli --scope user",
     "setup:project": "bun setup.ts install cli --scope project",
     "setup:all": "bun setup.ts install all --scope user",
@@ -25,11 +24,6 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "@types/react": "19.2.14",
-    "ink": "6.8.0",
-    "ink-text-input": "6.0.0",
-    "react": "19.2.4",
-    "react-devtools-core": "6.1.5"
+    "@modelcontextprotocol/sdk": "1.29.0"
   }
 }

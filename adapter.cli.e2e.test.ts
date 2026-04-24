@@ -573,7 +573,8 @@ for (const config of CLI_ADAPTERS) {
           },
         })
       );
-      expect(assignQueuedText).toContain(`Assigned work #${queuedWorkId} to agent ${helper.id}.`);
+      expect(assignQueuedText).toContain(`Assigned work #${queuedWorkId} to ${helper.name}.`);
+      expect(assignQueuedText).toContain("Next: owner can take it when work starts");
 
       const handoffText = textContent(
         await session.client.callTool({

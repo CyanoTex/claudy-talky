@@ -1469,7 +1469,7 @@ function handleAssignWork(body: AssignWorkRequest): AssignWorkResponse {
   ) {
     return {
       ok: false,
-      error: `Work item #${workId} is owned by ${currentWork.owner_id ?? "the queue"}. Only the owner, queue creator, or an operator can reassign it.`,
+      error: `Work item #${workId} is owned by ${currentWork.owner_id ?? "the queue"}. Only the owner, queue creator, or a work admin can reassign it.`,
     };
   }
 
